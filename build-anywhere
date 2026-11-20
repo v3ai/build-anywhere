@@ -155,10 +155,24 @@ ba_arch() {
 # standard library, and the result must run.
 
 ba_write_probe() {
+    # Every C89 header: a compiler whose system headers are incomplete
+    # (gcc without the kernel headers, say) fails here, not later.
     cat >"$BA_TMP/probe.c" <<'EOF'
+#include <assert.h>
+#include <ctype.h>
+#include <errno.h>
+#include <float.h>
+#include <limits.h>
+#include <locale.h>
+#include <math.h>
+#include <setjmp.h>
+#include <signal.h>
+#include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 char buf[16]; /* global: pnut's shell backend has no local arrays */
 
@@ -349,17 +363,14 @@ pkg_compilers() {
 # sudo and doas ask for passwords on the terminal itself.
 pkg_run() {
     vsay "+ $PKG_SUDO $*"
-    echo "+ $PKG_SUDO $*" >"$BA_TMP/pkg.out"
+    echo "+ $PKG_SUDO $*" >>"$BA_TMP/pkg.out"
     $PKG_SUDO "$@" </dev/null >>"$BA_TMP/pkg.out" 2>&1
-    pr_st=$?
-    cat "$BA_TMP/pkg.out" >>"$BA_TMP/log"
-    return $pr_st
 }
 
-# The last lines the package manager printed, indented.
+# The last lines the package manager printed for this install, indented.
 pkg_output() {
     [ -f "$BA_TMP/pkg.out" ] || return 0
-    sed -e :a -e '$q;N;7,$D;ba' "$BA_TMP/pkg.out" | sed 's/^/    /' >&2
+    sed -e :a -e '$q;N;16,$D;ba' "$BA_TMP/pkg.out" | sed 's/^/    /' >&2
 }
 
 # softwareupdate: install the newest Command Line Tools without the
@@ -393,7 +404,10 @@ pkg_install() {
     dnf|yum|microdnf)
         pkg_run "$1" install -y "$2" ;;
     tdnf)   # Photon OS, Azure Linux: gcc does not pull in these
-        pkg_run tdnf install -y "$2" glibc-devel binutils ;;
+        pkg_run tdnf install -y "$2" glibc-devel binutils || return 1
+        # <limits.h> needs the kernel's headers, which have different names.
+        pkg_run tdnf install -y linux-api-headers || pkg_run tdnf install -y kernel-headers
+        return 0 ;;
     zypper)
         pkg_run zypper --non-interactive install --no-recommends "$2" glibc-devel ;;
     apk)
@@ -448,7 +462,11 @@ tier_package() {
         case $tp_pm in brew|nix|termux) PKG_SUDO= tp_how="(no root needed)" ;; *) tp_how=$PKG_HOW ;; esac
         for tp_c in $(pkg_compilers "$tp_pm"); do
             say "installing $tp_c with $tp_pm $tp_how..."
-            if tp_dirs=$(pkg_install "$tp_pm" "$tp_c"); then
+            : >"$BA_TMP/pkg.out"
+            tp_dirs=$(pkg_install "$tp_pm" "$tp_c")
+            tp_st=$?
+            cat "$BA_TMP/pkg.out" >>"$BA_TMP/log"
+            if [ "$tp_st" = 0 ]; then
                 # shellcheck disable=SC2086
                 if search_cc "$tp_c from $tp_pm:" "$tp_c" $tp_dirs; then
                     return 0

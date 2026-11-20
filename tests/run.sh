@@ -311,7 +311,8 @@ if [ -n "$realcc" ]; then
     rm -f "$T/hello"
     pkg_ba STUB_UID=0 sh "$BA" --tiers=package --cache="$pc" -o "$T/hello" "$hello" 2>"$T/err"
     if [ "$("$T/hello" pkg 2>/dev/null)" = "hello, pkg" ] &&
-       grep -q "^tdnf install -y gcc glibc-devel binutils" "$T/pm.log"; then
+       grep -q "^tdnf install -y gcc glibc-devel binutils" "$T/pm.log" &&
+       grep -q "^tdnf install -y linux-api-headers" "$T/pm.log"; then
         ok "package: tdnf"
     else
         bad "package: tdnf"; sed 's/^/      /' "$T/err" "$T/pm.log" | tail -n 10
