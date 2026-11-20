@@ -17,18 +17,20 @@ sh build-anywhere/build-anywhere -O2 -o myprog src/*.c
 
 ## How it gets a compiler
 
-It tries four tiers in order and uses the first one that compiles and runs a
+It tries five tiers in order and uses the first one that compiles and runs a
 test program:
 
 | Tier | What it does | Needs | First use | Output |
 |---|---|---|---|---|
 | **system** | Uses an installed compiler: `$CC`, `cc`, `c99`, `gcc`, `clang`, `tcc`, `pcc`, `cproc`, ... | a compiler | instant | native program |
-| **download** | Downloads [Zig](https://ziglang.org) 0.17.1 and uses it as `zig cc`. The archive is checked against a pinned SHA-256 before anything in it runs. Community mirrors are tried in random order, then ziglang.org. | network, a downloader (`curl`, `wget`, `fetch` or `ftp`), a SHA-256 tool, an xz unpacker | ~10 s | native program |
+| **package** | Installs gcc (or clang, if gcc can't be installed) with the system's package manager: `apt-get`, `dnf`, `yum`, `zypper`, `apk`, `pacman`, `xbps-install`, FreeBSD `pkg`, Homebrew, Nix or Termux, or the Command Line Tools on macOS. | network, and root, passwordless `sudo`/`doas`, or a terminal to type a password in (Homebrew, Nix and Termux need none) | ~10-60 s | native program |
+| **download** | Downloads a prebuilt gcc for Linux (static, with musl) from [musl.cc](https://musl.cc), its mirror, or [cross-tools](https://github.com/cross-tools/musl-cross), and keeps it in the cache. The archive is checked against a SHA-512 or SHA-256 pinned in the script before anything in it runs. | Linux on x86_64, x86, arm64, armv6/armv7 or ppc64le; network; `curl`, `wget` or BusyBox; a hash tool; about 1 GB of disk | ~30 s | native static program |
 | **bootstrap** | Builds TinyCC from source, starting from a C compiler written in shell. | x86 or x86_64 Linux, any POSIX shell | ~4-5 min, once | native static program |
 | **shell** | Compiles your program *into a shell script* with [pnut](https://github.com/udem-dlteam/pnut). | any POSIX shell | seconds | shell script (subset of C) |
 
-Compilers that are acquired (Zig, TinyCC) are kept in
-`~/.cache/build-anywhere` and reused. Each tier behaves like `cc`, so
+Compilers that build-anywhere downloads or builds (the prebuilt gcc,
+TinyCC) are kept in `~/.cache/build-anywhere` and reused; packages are
+installed the normal way, by the package manager. Each tier behaves like `cc`, so
 the flags you pass (`-o`, `-I`, `-D`, `-O2`, ...) go straight to it.
 
 ## Using it in a project
@@ -60,8 +62,9 @@ $ sh build-anywhere/build-anywhere --doctor
 build-anywhere 0.1.0 on x86_64 linux
 cache: /home/me/.cache/build-anywhere
 
-system:    ok ('gcc')
-download:  possible (Zig 0.17.1 for x86_64-linux, needs network)
+system:    ok (cc)
+package:   possible (gcc or clang with apt-get, with sudo)
+download:  possible (gcc x86_64-linux-musl-native, about 90 MB, needs network)
 bootstrap: possible (one-time build, several minutes, using /usr/bin/dash)
 shell:     possible (C subset only, using /usr/bin/dash)
 ```
@@ -70,6 +73,37 @@ Options: `--tiers=system,bootstrap` restricts and orders the tiers,
 `--cache=DIR` moves the cache, `-v` shows every probe and command. The
 environment variables `CC`, `BA_TIERS`, `BA_CACHE`, `BA_SHELL` and
 `BA_VERBOSE=1` do the same.
+
+## The package tier
+
+When no compiler works, build-anywhere asks the package manager for one,
+without prompts (`apt-get install -y --no-install-recommends gcc libc6-dev`,
+`apk add gcc musl-dev`, `dnf install -y gcc`, `brew install gcc`, ...). If
+the package lists are missing, as in a fresh container, it updates them
+first. It then probes again; if gcc can't be installed or doesn't work,
+it tries clang.
+
+Most package managers need root. build-anywhere uses them when it runs as
+root, when `sudo -n` or `doas -n` works without a password, or when there
+is a terminal on which sudo can ask for one. Otherwise it says so and moves
+on to the next tier. Homebrew, Nix (`nix build nixpkgs#gcc`, which only
+adds to the Nix store) and Termux need no root. To never use root, set
+`BA_SUDO=never`. To skip this tier, leave it out of `--tiers`.
+
+## The download tier
+
+On Linux, build-anywhere can download a complete gcc that needs nothing
+from the system: gcc, binutils and musl, all statically linked. It is
+unpacked to the cache, and a wrapper there runs it with `-static`, so the
+programs it builds are static too and run on any Linux of the same
+architecture. The archive's hash is pinned in the script, and an archive
+that doesn't match is deleted without being unpacked. If a source is down
+or serves a bad file, the next one is tried: musl.cc, then its mirror
+more.musl.cc, then (on x86_64) a newer gcc from cross-tools.
+
+Each toolchain listed was tested: on x86_64 and x86 natively, and on arm64,
+armv7, armv6 and ppc64le under qemu-user. The riscv64 and s390x toolchains
+on musl.cc are left out because their linker crashed in that test.
 
 ## The bootstrap tier
 
@@ -125,23 +159,32 @@ somewhere with nothing else, and it is much slower than a native program.
 
 ## Platforms
 
-| | system | download | bootstrap | shell |
-|---|---|---|---|---|
-| Linux x86_64, x86 | yes | yes | yes | yes |
-| Linux arm64, arm, riscv64, ppc64le, s390x, loongarch64 | yes | yes | - | yes |
-| macOS (x86_64, arm64) | yes | yes | - | yes |
-| FreeBSD, NetBSD, OpenBSD | yes | yes | - | yes |
-| illumos, other POSIX systems | yes | - | - | yes |
+| | system | package | download | bootstrap | shell |
+|---|---|---|---|---|---|
+| Linux x86_64, x86 | yes | yes | yes | yes | yes |
+| Linux arm64, armv6, armv7, ppc64le | yes | yes | yes | - | yes |
+| Linux riscv64, s390x, other | yes | yes | - | - | yes |
+| macOS (x86_64, arm64) | yes | Homebrew, Nix, Command Line Tools | - | - | yes |
+| FreeBSD | yes | yes | - | - | yes |
+| NetBSD, OpenBSD, illumos, other POSIX systems | yes | Nix | - | - | yes |
+
+On NetBSD and OpenBSD the compiler and the C headers are part of the base
+system's `comp` set, which no package replaces, so there is no package
+tier there.
 
 The driver is plain POSIX `sh`. The tests run it under dash, bash,
 BusyBox sh, ksh (ksh93), mksh and yash.
 
 ## Security
 
-- No step needs root, and nothing is installed outside the cache directory.
-- Downloads are accepted only if their SHA-256 matches the hash pinned in
-  the `build-anywhere` script. If no SHA-256 tool is available, the
-  download tier is skipped rather than trusting an unverified file.
+- Only the package tier uses root, only through the system's package
+  manager, and only if root is already available (see above);
+  `BA_SUDO=never` turns that off. Every other tier writes only to the cache
+  directory.
+- Downloaded toolchains are accepted only if their hash matches the one
+  pinned in the `build-anywhere` script. If no tool for that hash is
+  available, the download is skipped rather than trusting an unverified
+  file.
 - The bootstrap starts from source that is in this repository and can be
   read. No binary is downloaded or executed.
 
@@ -150,7 +193,7 @@ BusyBox sh, ksh (ksh93), mksh and yash.
 ```sh
 sh tests/run.sh                     # every tier that is quick, under every installed shell
 BA_TEST_BOOTSTRAP=1 sh tests/run.sh # also the full bootstrap (~5 minutes)
-BA_TEST_DOWNLOAD=1 sh tests/run.sh  # also a real Zig download
+BA_TEST_DOWNLOAD=1 sh tests/run.sh  # also a real download of the prebuilt gcc
 sh tests/libc/run.sh                # the libc against glibc (needs gcc and objcopy)
 ```
 
@@ -175,9 +218,11 @@ build-anywhere stands on these projects:
   only kaem and sh.
 - **[bootsh](https://github.com/davidar/bootsh)**: a whole POSIX userland
   with a C99 compiler in one small executable.
-- **[Zig](https://ziglang.org)**: `zig cc` is a complete, relocatable C
-  toolchain in a single download, which makes it ideal for the download
-  tier.
+- **[musl.cc](https://musl.cc)** and
+  **[cross-tools/musl-cross](https://github.com/cross-tools/musl-cross)**:
+  static gcc toolchains that run on any Linux, used by the download tier.
+- **[Homebrew's installer](https://github.com/Homebrew/install)**: the way
+  to install the macOS Command Line Tools without a dialog.
 
 ## License
 

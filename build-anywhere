@@ -11,7 +11,10 @@
 # compiles and runs a test program wins:
 #
 #   system     a compiler that is already installed (cc, c99, gcc, clang, tcc, ...)
-#   download   a pinned, SHA-256-verified Zig toolchain, used as `zig cc`
+#   package    install gcc (or clang) with the system's package manager: apt-get,
+#              dnf, yum, zypper, apk, pacman, xbps-install, pkg, Homebrew or Nix
+#   download   download a prebuilt static gcc toolchain, checked against a
+#              pinned hash before it is run (Linux)
 #   bootstrap  TCC built from source starting from nothing but this shell, using
 #              the pnut C-to-shell compiler (x86 and x86_64 Linux)
 #   shell      the program itself compiled to a POSIX shell script by pnut
@@ -19,7 +22,7 @@
 #
 # Options:
 #   --tiers=LIST   comma-separated tiers to try, in order
-#                  (default: system,download,bootstrap,shell)
+#                  (default: system,package,download,bootstrap,shell)
 #   --cache=DIR    where acquired compilers are kept
 #                  (default: ${XDG_CACHE_HOME:-$HOME/.cache}/build-anywhere)
 #   -v, --verbose  show each probe and command
@@ -29,60 +32,31 @@
 # Every other argument is passed to the compiler unchanged.
 #
 # Environment: CC (tried first), BA_TIERS, BA_CACHE, BA_SHELL (shell used to run
-# pnut; default: the fastest one installed), BA_VERBOSE=1.
+# pnut; default: the fastest one installed), BA_VERBOSE=1, BA_SUDO (package
+# tier: "auto" uses root, passwordless sudo or doas, or asks for a password
+# on a terminal; "never" only uses package managers that need no root).
 
 BA_VERSION=0.1.0
 
-# Zig release used by the download tier. The checksums come from
-# https://ziglang.org/download/index.json and are checked before anything
-# from the archive is run.
-BA_ZIG_VERSION=0.17.1
-BA_ZIG_TABLE='
-x86_64-linux        3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a
-x86-linux           0855367e096917bb0b628050d994d1871cc8c1f9192542163f9f93b6a30c9c6c
-aarch64-linux       a1546d5646eb184437918d6635ca6b762a0e889eac09cef720ee7a1ed3fe7795
-arm-linux           45b5262ef4d4d1e70d21683b2ef4c1b765b067f34a13e2aa57d5f92bb02382a9
-riscv64-linux       b31a3fd8b42b614cb68f93f18aab11c1721336654a9c8dd389ff7bab3a6827dc
-powerpc64le-linux   f06911010b44fa4fdd8e8775669acf499310ff18e209bb392f2eb2428dccc05e
-loongarch64-linux   cc698ceda768c2bd94eb15dfa53496da94bc432f20ac713b60798b9f319cc228
-s390x-linux         e88c93115bdc18f7f37551945cb55ba041a002d2334fd1d6f7424187bec3dee8
-x86_64-macos        9af07b20319fbd0c92ee46ad23e81d6a782b1aaea2cfb8dcbff35f1d2c7ddbb7
-aarch64-macos       75f1bc7a1e9852f17ec9a0c1895f767c4ec56d46bc8a834920eece1d0359dd8d
-x86_64-freebsd      fd8b9728f05db2a9942fc1f18087c0e0d6dfccb7a51557b06cf026d3e4c78542
-aarch64-freebsd     5ebd395db8996df2bfe1c252b5b6848ec8fad886192cbd88358fbcbf91c91703
-arm-freebsd         a0ec7b932278086cef43a460938f85f7959a44a660aabda30044bbbc0132cb6f
-powerpc64le-freebsd ba175e24970d9711bf4fbab196914f3d6324a60effca2fde34a68afebbafdfc0
-riscv64-freebsd     b237ebfbe0b276641bf1036c7557dcd72dcfc00493ef3491ea71f455b4989175
-x86_64-netbsd       ab96eafda31fab8525f37d5ec66ffab53b40ce542388ac0aaa8924a7df2acb47
-x86-netbsd          ecfcbff50565d2510c39295f1f7bccb3b9fb8e147cece317a575226e58b33eef
-aarch64-netbsd      ddf6ea43b006f4a4766e81e396d53f3f4eb4d5526f137ded797ccf6d597abdef
-arm-netbsd          71aff179be613b47ef690d34784df5885403d5fbe600710686c7eb14faf8b835
-riscv64-netbsd      af5b5ce63e21b9e85a0ed988651ec03c2d039cabbc0f9dd41be1e8594be8c3e6
-x86_64-openbsd      282bd7041d25c4280d66626461c7e946d5553b5b31719de68aa1b27ddb39ed9f
-aarch64-openbsd     cb23acb22dc53674d399e0e935568aad94f15055d5e12f8d776f93fb5836d17c
-arm-openbsd         bd4f7b8d33c5a8af7d176e52e4d22157c89442440fbb423d1a9be314c8ce989a
-riscv64-openbsd     00a6b773ed54cc6ef4ebae8fa3f3e398350249e99bbd45c937ceff3a02178b23
-'
-# Zig asks automated downloaders to use its community mirrors first
-# (https://ziglang.org/download/community-mirrors/). ziglang.org is tried last.
-BA_ZIG_MIRRORS='
-https://pkg.hexops.org/zig
-https://zigmirror.hryx.net/zig
-https://zig.linus.dev/zig
-https://zig.squirl.dev
-https://zig.mirror.mschae23.de/zig
-https://ziglang.freetls.fastly.net
-https://zig.tilok.dev
-https://zig-mirror.tsimnet.eu/zig
-https://zig.karearl.com/zig
-https://pkg.earth/zig
-https://fs.liujiacai.net/zigbuilds
-https://zigmirror.com
-https://zig.chainsafe.dev
-https://zig.savalione.com
-https://zig.bcr.ist
-https://zig.vortan.dev/zig
-https://pkg.alexrp.com/zig
+# Prebuilt toolchains for the download tier: gcc and musl, statically
+# linked, so they run on any Linux of their architecture. Each line is
+#   KEY ALGORITHM DIGEST FILE DIRECTORY GCC NEEDS URL...
+# KEY is the architecture, DIGEST the pinned hash of FILE (checked before
+# anything in it runs), DIRECTORY the top directory in FILE, GCC the
+# compiler in it, NEEDS a file that must exist for it to run ("-": none),
+# and each URL a directory to fetch FILE from, tried in order.
+# Hashes: https://musl.cc/SHA512SUMS and the .sha256 files of the
+# cross-tools/musl-cross 20261001 release. Each toolchain here was tested
+# (non-x86 ones under qemu-user). The riscv64 and s390x builds on musl.cc
+# are left out: their linker crashed in that test.
+BA_TOOLCHAINS='
+x86_64  sha512 44d441ad9aa11a06feddf3daa4c9f53ad7d9ca37af1f5a61379aca07793703d179410cea723c1b7fca94c4de19a321228bdb3656bc5cbdb5e3bea8e2d6dac6c7 x86_64-linux-musl-native.tgz x86_64-linux-musl-native bin/gcc - https://musl.cc https://more.musl.cc/11.2.1/x86_64-linux-musl
+x86     sha512 fa16e12bc665d3292586156847b8e957adb5e4b415bd94d6a7fb0e0d4991bdf0d770e24b35f12fee31100c21780748a1ac14a18f3c1390480d05df7fa790c7d4 i686-linux-musl-native.tgz i686-linux-musl-native bin/gcc - https://musl.cc https://more.musl.cc/11.2.1/x86_64-linux-musl
+aarch64 sha512 16d544e09845c9dbba50f29e0cb04dd661e17eb63c56acad6a67fd2a78aa7596b792477c7177d3cd56d408a27dc291a90507df882f2b099c0f25511ce08fd3b5 aarch64-linux-musl-native.tgz aarch64-linux-musl-native bin/gcc - https://musl.cc https://more.musl.cc/11.2.1/x86_64-linux-musl
+armv7   sha512 50b307c37e62a00d8d8a7c14e1f12c91ce11f16b25144b38fdec59e04de04bef8c5443b2922f20cccd36da0a0f5cfdd481b706ad21389bee2e7af4783c368f34 armv7l-linux-musleabihf-native.tgz armv7l-linux-musleabihf-native bin/gcc - https://musl.cc https://more.musl.cc/11.2.1/x86_64-linux-musl
+armv6   sha512 af05ac674f24e263edd13f13cffe077e7e02617eb1fb4314ae31bef6be2fe4c2f669c197bde5be9e5104f5c493bbf29497f4ba8f3300482807279935b162b7d8 armv6-linux-musleabihf-native.tgz armv6-linux-musleabihf-native bin/gcc - https://musl.cc https://more.musl.cc/11.2.1/x86_64-linux-musl
+powerpc64le sha512 d416546a4222be2d063ac99cfadead181d08199791e6367752a7e3421b9c20a3b6aade928205efbfd96c2dfb94b88401c992f79ab3a2fa1507e007be0a348a5c powerpc64le-linux-musl-native.tgz powerpc64le-linux-musl-native bin/gcc - https://musl.cc https://more.musl.cc/11.2.1/x86_64-linux-musl
+x86_64  sha256 faeaf3c7c377cb4351490988d9a1c8fed7d403a5b8066e5103af5d4dd96450fe x86_64-unknown-linux-musl.tar.xz x86_64-unknown-linux-musl bin/x86_64-unknown-linux-musl-gcc /lib64/ld-linux-x86-64.so.2 https://github.com/cross-tools/musl-cross/releases/download/20261001
 '
 
 # ---------------------------------------------------------------------------
@@ -208,31 +182,66 @@ probe_cc() {
 # ---------------------------------------------------------------------------
 # Tier 1: a compiler that is already installed.
 
-tier_system() {
+# Print the versioned compilers (gcc-14, clang-19, FreeBSD's gcc13, ...)
+# in DIR whose names start with NAME (gcc or clang), skipping gcc-ar-14,
+# gcc13-ar and the like.
+versioned_cc() { # DIR NAME
+    for vc_f in "$1/$2"-[0-9]* "$1/$2"[0-9]*; do
+        case ${vc_f##*/} in *-*-*|"$2"[0-9]*-*) continue ;; esac
+        [ -x "$vc_f" ] && printf '%s\n' "$vc_f"
+    done
+    return 0
+}
+
+# The names of the versioned compilers called NAME in PATH.
+path_versioned_cc() { # NAME
+    pv_ifs=$IFS; IFS=:
+    for pv_d in $PATH; do
+        IFS=$pv_ifs
+        versioned_cc "$pv_d" "$1" | sed 's|.*/||'
+    done
+    IFS=$pv_ifs
+}
+
+# search_cc DESCRIPTION PREFER [DIR...]: probe $CC, the compilers in each
+# DIR, then the usual compiler names in PATH, and set BA_CC and BA_CC_DESC
+# to the first that works. PREFER (gcc, clang or empty) is tried before
+# the other names, so that a compiler that was just installed wins over
+# an older one.
+search_cc() {
+    ts_desc=$1 ts_prefer=$2
+    shift 2
     ts_cands=
     [ -n "${CC:-}" ] && ts_cands=$CC
-    ts_cands="$ts_cands
-cc
-c99
-gcc
-clang
-tcc
-c89
-pcc
-cproc
-icx
-suncc"
-    # Versioned compilers (gcc-14, clang-19, ...) anywhere in PATH.
-    ts_ifs=$IFS; IFS=:
-    for ts_dir in $PATH; do
-        IFS=$ts_ifs
-        for ts_f in "$ts_dir"/gcc-[0-9]* "$ts_dir"/clang-[0-9]*; do
-            case ${ts_f##*/} in *-*-*) continue ;; esac   # skip gcc-ar-14 etc.
-            [ -x "$ts_f" ] && ts_cands="$ts_cands
-${ts_f##*/}"
+    ts_names="cc gcc clang"
+    [ -n "$ts_prefer" ] && ts_names="$ts_prefer $ts_names"
+    for ts_dir in "$@"; do
+        for ts_n in $ts_names; do
+            [ -x "$ts_dir/$ts_n" ] && ts_cands="$ts_cands
+$(q "$ts_dir/$ts_n")"
         done
+        ts_vs=$(versioned_cc "$ts_dir" gcc; versioned_cc "$ts_dir" clang)
+        ts_ifs=$IFS
+        IFS='
+'
+        for ts_f in $ts_vs; do
+            ts_cands="$ts_cands
+$(q "$ts_f")"
+        done
+        IFS=$ts_ifs
     done
-    IFS=$ts_ifs
+    for ts_n in $ts_prefer cc c99 gcc clang tcc c89 pcc cproc icx suncc; do
+        ts_cands="$ts_cands
+$ts_n"
+        if [ "$ts_n" = "$ts_prefer" ]; then
+            ts_cands="$ts_cands
+$(path_versioned_cc "$ts_n")"
+        fi
+    done
+    ts_cands="$ts_cands
+$(path_versioned_cc gcc)
+$(path_versioned_cc clang)"
+    ts_ifs=$IFS
 
     ts_nl='
 '
@@ -241,7 +250,7 @@ ${ts_f##*/}"
         IFS=$ts_ifs
         [ -n "$ts_c" ] || continue
         # $CC may hold flags ("gcc -m32"); only its first word must exist.
-        set -- $ts_c
+        eval "set -- $ts_c"
         have "$1" || continue
         ts_path=$(command -v "$1")
         # On macOS the /usr/bin compilers are stubs that open an installer
@@ -253,7 +262,7 @@ ${ts_f##*/}"
         fi
         if probe_cc "$ts_c"; then
             BA_CC=$ts_c
-            BA_CC_DESC="system compiler '$ts_c'"
+            BA_CC_DESC="$ts_desc '$*'"
             return 0
         fi
     done
@@ -261,8 +270,176 @@ ${ts_f##*/}"
     return 1
 }
 
+tier_system() {
+    search_cc "system compiler" ""
+}
+
 # ---------------------------------------------------------------------------
-# Tier 2: download a compiler.
+# Tier 2: install a compiler with the package manager.
+
+# Decide how to run commands as root. Sets PKG_SUDO (empty when already
+# root) and PKG_HOW. Fails when that would need a password and there is no
+# terminal to ask on, or when BA_SUDO=never.
+pkg_privilege() {
+    PKG_SUDO=
+    PKG_HOW="as root"
+    [ "$(id -u 2>/dev/null)" = 0 ] && return 0
+    [ "${BA_SUDO:-auto}" = never ] && return 1
+    if have sudo && sudo -n true >/dev/null 2>&1; then
+        PKG_SUDO="sudo -n"; PKG_HOW="with sudo"; return 0
+    fi
+    if have doas && doas -n true >/dev/null 2>&1; then
+        PKG_SUDO="doas -n"; PKG_HOW="with doas"; return 0
+    fi
+    if [ -t 0 ] && [ -t 2 ]; then
+        for pp_s in sudo doas; do
+            if have "$pp_s"; then
+                PKG_SUDO=$pp_s
+                PKG_HOW="with $pp_s (it may ask for your password)"
+                return 0
+            fi
+        done
+    fi
+    return 1
+}
+
+# pkg_managers [root]: print the package managers that can be used here,
+# best first. Those that need root are printed only with the argument
+# "root" (pass it when pkg_privilege succeeded).
+pkg_managers() {
+    if [ "${1:-}" = root ]; then
+        for pm in apt-get dnf yum microdnf zypper apk pacman xbps-install; do
+            have "$pm" && echo "$pm"
+        done
+        [ "$BA_OS" = freebsd ] && have pkg && echo pkg
+        # The Command Line Tools: clang, headers and the linker.
+        [ "$BA_OS" = macos ] && have softwareupdate && ! xcode-select -p >/dev/null 2>&1 &&
+            echo softwareupdate
+    fi
+    # These install without root.
+    if [ -n "${TERMUX_VERSION:-}" ] && have pkg; then echo termux; fi
+    have brew && [ "$(id -u 2>/dev/null)" != 0 ] && echo brew
+    have nix && echo nix
+    return 0
+}
+
+# The compilers to ask a package manager for, in order.
+pkg_compilers() {
+    case $1 in
+    termux|softwareupdate) echo clang ;;
+    *) echo gcc clang ;;
+    esac
+}
+
+# pkg_run COMMAND...: run as root (as decided by pkg_privilege), logging
+# the output. Standard input is closed so that nothing waits for a prompt;
+# sudo and doas ask for passwords on the terminal itself.
+pkg_run() {
+    vsay "+ $PKG_SUDO $*"
+    $PKG_SUDO "$@" </dev/null >>"$BA_TMP/log" 2>&1
+}
+
+# softwareupdate: install the newest Command Line Tools without the
+# dialog, the way Homebrew's installer does.
+pkg_clt() {
+    pc_flag=/tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress
+    pkg_run touch "$pc_flag" || return 1
+    pc_label=$(softwareupdate -l 2>>"$BA_TMP/log" | grep -B 1 -E 'Command Line Tools' |
+               awk -F'*' '/^ *\*/ { print $2 }' | sed -e 's/^ *Label: //' -e 's/^ *//' |
+               sort -V | tail -n 1)
+    pc_ok=1
+    if [ -n "$pc_label" ]; then
+        pkg_run softwareupdate -i "$pc_label" && pc_ok=0
+    else
+        vsay "package: softwareupdate offers no Command Line Tools"
+    fi
+    pkg_run rm -f "$pc_flag"
+    return $pc_ok
+}
+
+# pkg_install MANAGER COMPILER: install COMPILER (gcc or clang) and what it
+# needs to build C programs. On success, print directories outside PATH
+# that the compiler may have been installed to.
+pkg_install() {
+    case $1 in
+    apt-get)
+        set -- "$2" libc6-dev
+        pkg_run env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends "$@" ||
+            { pkg_run env DEBIAN_FRONTEND=noninteractive apt-get update -q &&
+              pkg_run env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends "$@"; } ;;
+    dnf|yum|microdnf)
+        pkg_run "$1" install -y "$2" ;;
+    zypper)
+        pkg_run zypper --non-interactive install --no-recommends "$2" glibc-devel ;;
+    apk)
+        pkg_run apk add --no-cache "$2" musl-dev ;;
+    pacman)
+        # Without a package database (a fresh container) it has to sync first.
+        pkg_run pacman -S --noconfirm --needed "$2" ||
+            pkg_run pacman -Sy --noconfirm --needed "$2" ;;
+    xbps-install)
+        pkg_run xbps-install -Sy "$2" ||
+            { pkg_run xbps-install -Syu xbps && pkg_run xbps-install -Sy "$2"; } ;;
+    pkg)
+        case $2 in gcc) set -- gcc ;; *) set -- llvm ;; esac
+        pkg_run env ASSUME_ALWAYS_YES=yes pkg install -y "$1" ;;
+    softwareupdate)
+        pkg_clt ;;
+    termux)
+        pkg_run pkg install -y "$2" ;;
+    brew)
+        case $2 in gcc) set -- gcc ;; *) set -- llvm ;; esac
+        pkg_run env HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 \
+            HOMEBREW_NO_ENV_HINTS=1 brew install "$1" || return 1
+        pi_pre=$(brew --prefix 2>/dev/null) && echo "$pi_pre/bin"
+        pi_pre=$(brew --prefix "$1" 2>/dev/null) && echo "$pi_pre/bin"
+        return 0 ;;
+    nix)
+        # This only adds the compiler to the Nix store; nothing else changes.
+        vsay "+ nix build nixpkgs#$2"
+        pi_out=$(nix --extra-experimental-features 'nix-command flakes' build --no-link \
+                 --print-out-paths "nixpkgs#$2" </dev/null 2>>"$BA_TMP/log") || return 1
+        printf '%s\n' "$pi_out" | sed 's|$|/bin|'
+        return 0 ;;
+    *) return 1 ;;
+    esac
+}
+
+tier_package() {
+    tp_root=
+    pkg_privilege && tp_root=root
+    tp_pms=$(pkg_managers "$tp_root")
+    if [ -z "$tp_pms" ]; then
+        tp_need=$(pkg_managers root | sed -n 1p)
+        if [ -n "$tp_need" ]; then
+            say "package: $tp_need could install a compiler, but needs root (run as root, or with sudo or doas)"
+        else
+            vsay "package: no supported package manager"
+        fi
+        return 1
+    fi
+    for tp_pm in $tp_pms; do
+        PKG_SUDO_SAVE=$PKG_SUDO
+        case $tp_pm in brew|nix|termux) PKG_SUDO= tp_how="(no root needed)" ;; *) tp_how=$PKG_HOW ;; esac
+        for tp_c in $(pkg_compilers "$tp_pm"); do
+            say "installing $tp_c with $tp_pm $tp_how..."
+            if tp_dirs=$(pkg_install "$tp_pm" "$tp_c"); then
+                # shellcheck disable=SC2086
+                if search_cc "$tp_c from $tp_pm:" "$tp_c" $tp_dirs; then
+                    return 0
+                fi
+                say "package: $tp_pm installed $tp_c, but it does not compile and run a test program"
+            else
+                say "package: $tp_pm could not install $tp_c"
+            fi
+        done
+        PKG_SUDO=$PKG_SUDO_SAVE
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Tier 3: download a prebuilt toolchain.
 
 # ba_fetch URL FILE
 ba_fetch() {
@@ -291,148 +468,205 @@ have_fetcher() {
         { [ "$BA_OS" = openbsd ] && have ftp; }
 }
 
-# ba_sha256 FILE -> prints the lowercase hex digest, or fails.
-ba_sha256() {
-    sh_out=
-    if have sha256sum; then sh_out=$(sha256sum "$1" 2>/dev/null)
-    elif have shasum; then sh_out=$(shasum -a 256 "$1" 2>/dev/null)
-    elif have sha256; then sh_out=$(sha256 -q "$1" 2>/dev/null)
-    elif have openssl; then sh_out=$(openssl dgst -sha256 -r "$1" 2>/dev/null)
-    elif have busybox; then sh_out=$(busybox sha256sum "$1" 2>/dev/null)
-    elif have cksum && cksum -a sha256 /dev/null >/dev/null 2>&1; then
-        sh_out=$(cksum -a sha256 -q "$1" 2>/dev/null) ||
-            sh_out=$(cksum -a sha256 "$1" 2>/dev/null)
+# ba_hash ALGORITHM(sha256|sha512) FILE -> prints the lowercase hex digest.
+ba_hash() {
+    bh_n=${1#sha}
+    bh_len=64
+    [ "$bh_n" = 512 ] && bh_len=128
+    bh_out=
+    if have "sha${bh_n}sum"; then bh_out=$("sha${bh_n}sum" "$2" 2>/dev/null)
+    elif have shasum; then bh_out=$(shasum -a "$bh_n" "$2" 2>/dev/null)
+    elif have "sha$bh_n"; then bh_out=$("sha$bh_n" -q "$2" 2>/dev/null)
+    elif have openssl; then bh_out=$(openssl dgst "-sha$bh_n" -r "$2" 2>/dev/null)
+    elif have busybox; then bh_out=$(busybox "sha${bh_n}sum" "$2" 2>/dev/null)
+    elif have cksum && cksum -a "sha$bh_n" /dev/null >/dev/null 2>&1; then
+        bh_out=$(cksum -a "sha$bh_n" -q "$2" 2>/dev/null) ||
+            bh_out=$(cksum -a "sha$bh_n" "$2" 2>/dev/null)
     fi
-    sh_out=$(printf '%s\n' "$sh_out" | tr 'A-F' 'a-f' |
-             sed -n 's/.*\([0-9a-f]\{64\}\).*/\1/p' | sed -n 1p)
-    [ -n "$sh_out" ] || return 1
-    printf '%s\n' "$sh_out"
+    bh_out=$(printf '%s\n' "$bh_out" | tr 'A-F' 'a-f' |
+             sed -n "s/.*\([0-9a-f]\{$bh_len\}\).*/\1/p" | sed -n 1p)
+    [ -n "$bh_out" ] || return 1
+    printf '%s\n' "$bh_out"
 }
 
-have_sha256() {
-    have sha256sum || have shasum || have sha256 || have openssl || have busybox ||
-        { have cksum && cksum -a sha256 /dev/null >/dev/null 2>&1; }
+have_hash() { # ALGORITHM
+    hh_n=${1#sha}
+    have "sha${hh_n}sum" || have shasum || have "sha$hh_n" || have openssl ||
+        { have busybox && busybox "sha${hh_n}sum" /dev/null >/dev/null 2>&1; } ||
+        { have cksum && cksum -a "sha$hh_n" /dev/null >/dev/null 2>&1; }
 }
 
-# untar_xz ARCHIVE DIR
-untar_xz() {
-    if have xz; then
-        xz -dc "$1" | (cd "$2" && tar -xf -) && return 0
-    fi
-    if have unxz; then
-        unxz -c "$1" | (cd "$2" && tar -xf -) && return 0
-    fi
-    if have xzcat; then
-        xzcat "$1" | (cd "$2" && tar -xf -) && return 0
-    fi
-    (cd "$2" && tar -xJf "$1") 2>>"$BA_TMP/log" && return 0
-    if have busybox; then
-        busybox xz -dc "$1" | (cd "$2" && busybox tar -xf -) && return 0
-    fi
+# ba_unpack ARCHIVE DIR: unpack a .tgz or .tar.xz.
+ba_unpack() {
+    case $1 in
+    *.tgz|*.tar.gz)
+        if have gzip; then gzip -dc "$1" | (cd "$2" && tar -xf -) && return 0; fi
+        if have busybox; then busybox gzip -dc "$1" | (cd "$2" && busybox tar -xf -) && return 0; fi ;;
+    *.tar.xz)
+        if have xz; then xz -dc "$1" | (cd "$2" && tar -xf -) && return 0; fi
+        if have unxz; then unxz -c "$1" | (cd "$2" && tar -xf -) && return 0; fi
+        if have xzcat; then xzcat "$1" | (cd "$2" && tar -xf -) && return 0; fi
+        (cd "$2" && tar -xJf "$1") 2>>"$BA_TMP/log" && return 0
+        if have busybox; then busybox xz -dc "$1" | (cd "$2" && busybox tar -xf -) && return 0; fi ;;
+    esac
     return 1
 }
 
-have_unxz() {
-    have xz || have unxz || have xzcat || have busybox ||
-        { have tar && tar --version 2>&1 | grep -q -i -e bsdtar -e libarchive; } ||
-        { [ "$BA_OS" != linux ] && have tar; }   # BSD tars read xz natively
+have_unpacker() { # FILE
+    case $1 in
+    *.tgz|*.tar.gz) have gzip || have busybox ;;
+    *.tar.xz) have xz || have unxz || have xzcat || have busybox ||
+              { have tar && tar --version 2>&1 | grep -q -i -e bsdtar -e libarchive; } ;;
+    *) return 1 ;;
+    esac
 }
 
-zig_platform() { echo "$BA_ARCH-$BA_OS"; }
-
-zig_sha() {
-    printf '%s\n' "$BA_ZIG_TABLE" | awk -v p="$1" '$1 == p { print $2 }'
+# The key of BA_TOOLCHAINS for this machine.
+toolchain_key() {
+    case $BA_ARCH in
+    arm)
+        case $(uname -m 2>/dev/null) in
+        armv6*) echo armv6 ;;
+        armv7*|armv8*|aarch64|arm64) echo armv7 ;;   # (32-bit user space on arm64)
+        *) echo arm-other ;;
+        esac ;;
+    *) echo "$BA_ARCH" ;;
+    esac
 }
 
-# Print the mirror list in random order (awk's srand() seeds from the clock).
-zig_mirrors() {
-    printf '%s\n' "$BA_ZIG_MIRRORS" | awk -v seed="$$" '
-        NF { m[n++] = $1 }
-        END {
-            srand(); r = int(rand() * 32768) + seed
-            srand(r)
-            for (i = n - 1; i > 0; i--) { j = int(rand() * (i + 1)); t = m[i]; m[i] = m[j]; m[j] = t }
-            for (i = 0; i < n; i++) print m[i]
-        }'
+# Print the BA_TOOLCHAINS lines that fit this machine.
+toolchains() {
+    [ "$BA_OS" = linux ] || return 0
+    printf '%s\n' "$BA_TOOLCHAINS" | awk -v k="$(toolchain_key)" '$1 == k'
 }
 
-# Write the `cc` wrapper for an installed zig.
-zig_write_wrapper() {
+# Free space in kilobytes on the file system holding DIR.
+free_kb() {
+    df -Pk "$1" 2>/dev/null | awk 'NR == 2 { print $4 }'
+}
+
+# Write a cc wrapper for an unpacked toolchain: always link statically, as
+# its C library (musl) is not installed on the system.
+toolchain_wrapper() { # DIR GCC
     mkdir -p "$BA_CACHE/bin" || return 1
-    zw=$BA_CACHE/bin/cc-zig
+    tw=$BA_CACHE/bin/cc-${1##*/toolchain-}
     {
         echo '#!/bin/sh'
-        echo '# Generated by build-anywhere: runs the downloaded Zig as a C compiler.'
-        echo "ZIG_GLOBAL_CACHE_DIR=\${ZIG_GLOBAL_CACHE_DIR:-$(q "$BA_CACHE/zig-cache")}"
-        echo 'ZIG_LOCAL_CACHE_DIR=${ZIG_LOCAL_CACHE_DIR:-$ZIG_GLOBAL_CACHE_DIR}'
-        echo 'export ZIG_GLOBAL_CACHE_DIR ZIG_LOCAL_CACHE_DIR'
-        # zig cc turns on UBSan traps when no -O flag is given. A plain C
-        # compiler does not, so neither does this wrapper; flags given by the
-        # caller come later and can turn it back on.
-        echo "exec $(q "$1/zig") cc -fno-sanitize=undefined \"\$@\""
-    } >"$zw.tmp" && chmod 755 "$zw.tmp" && mv -f "$zw.tmp" "$zw"
+        echo '# Generated by build-anywhere: a downloaded gcc that links statically with musl.'
+        echo "exec $(q "$1/$2") -static \"\$@\""
+    } >"$tw.$$" && chmod 755 "$tw.$$" && mv -f "$tw.$$" "$tw" || return 1
+    echo "$tw"
+}
+
+# toolchain_get ALGORITHM DIGEST FILE DIRECTORY GCC URL...: download FILE,
+# verify it and unpack it as $BA_CACHE/toolchain-DIRECTORY. Call it with the
+# download lock held.
+toolchain_get() {
+    tg_algo=$1 tg_sum=$2 tg_file=$3 tg_top=$4 tg_gcc=$5
+    shift 5
+    tg_dir=$BA_CACHE/toolchain-$tg_top
+    # Unpacked by a process that was interrupted (we hold the lock).
+    for tg_old in "$BA_CACHE"/.unpack.*; do
+        [ -d "$tg_old" ] && { chmod -R u+w "$tg_old"; rm -rf "$tg_old"; }
+    done
+    [ -x "$tg_dir/$tg_gcc" ] && return 0    # another process got it meanwhile
+    have_fetcher || { vsay "download: no curl, wget, fetch or ftp"; return 1; }
+    if ! have_hash "$tg_algo"; then
+        say "download: no $tg_algo tool to verify $tg_file with; not downloading it"
+        return 1
+    fi
+    have_unpacker "$tg_file" || { vsay "download: cannot unpack $tg_file"; return 1; }
+    tg_free=$(free_kb "$BA_CACHE")
+    if [ -n "$tg_free" ] && [ "$tg_free" -lt 1000000 ]; then
+        say "download: needs about 1 GB free in $BA_CACHE (only $((tg_free / 1024)) MB)"
+        return 1
+    fi
+    # BA_TEST_URLS replaces the sources ("default" stands for the real
+    # ones); the tests use it to check that a corrupted download is rejected.
+    if [ -n "${BA_TEST_URLS:-}" ]; then
+        tg_urls=
+        for tg_u in $BA_TEST_URLS; do
+            if [ "$tg_u" = default ]; then tg_urls="$tg_urls $*"; else tg_urls="$tg_urls $tg_u"; fi
+        done
+        # shellcheck disable=SC2086
+        set -- $tg_urls
+    fi
+    tg_arch=$BA_TMP/$tg_file
+    tg_ok=0
+    for tg_base in "$@"; do
+        say "downloading gcc ($tg_file, about 90 MB) from $tg_base..."
+        if ! ba_fetch "$tg_base/$tg_file" "$tg_arch"; then
+            say "download: could not fetch $tg_base/$tg_file"
+            continue
+        fi
+        tg_got=$(ba_hash "$tg_algo" "$tg_arch") || { say "download: could not hash $tg_file"; break; }
+        if [ "$tg_got" = "$tg_sum" ]; then tg_ok=1; break; fi
+        say "download: checksum mismatch for $tg_base/$tg_file; not using it"
+    done
+    if [ "$tg_ok" = 0 ]; then
+        rm -f "$tg_arch"
+        return 1
+    fi
+    tg_x=$BA_CACHE/.unpack.$$
+    rm -rf "$tg_x"
+    mkdir -p "$tg_x" || return 1
+    say "unpacking $tg_file..."
+    if ba_unpack "$tg_arch" "$tg_x" && [ -x "$tg_x/$tg_top/$tg_gcc" ]; then
+        rm -f "$tg_arch"
+        # Some archives have read-only directories: they could not be
+        # moved, or deleted later with rm -rf.
+        chmod -R u+w "$tg_x" &&
+            rm -rf "$tg_dir" &&
+            mv "$tg_x/$tg_top" "$tg_dir" &&
+            rm -rf "$tg_x" &&
+            return 0
+        say "download: could not install $tg_file in $BA_CACHE"
+    else
+        say "download: could not unpack $tg_file"
+    fi
+    chmod -R u+w "$tg_x" 2>/dev/null
+    rm -rf "$tg_x" "$tg_arch"
+    return 1
 }
 
 tier_download() {
-    td_plat=$(zig_platform)
-    td_sha=$(zig_sha "$td_plat")
-    if [ -z "$td_sha" ]; then
-        vsay "download: no Zig $BA_ZIG_VERSION build for $td_plat"
+    td_list=$(toolchains)
+    if [ -z "$td_list" ]; then
+        vsay "download: no prebuilt toolchain for $BA_ARCH $BA_OS"
         return 1
     fi
-    td_name=zig-$td_plat-$BA_ZIG_VERSION
-    td_dir=$BA_CACHE/$td_name
-
-    if [ ! -x "$td_dir/zig" ]; then
-        have_fetcher || { vsay "download: no curl, wget, fetch or ftp"; return 1; }
-        have_sha256 || {
-            say "download: no SHA-256 tool, so a download could not be verified; skipping"
-            return 1
-        }
-        have_unxz || { vsay "download: no way to unpack .tar.xz"; return 1; }
-
-        td_file=$td_name.tar.xz
-        td_arch=$BA_TMP/$td_file
-        td_ok=0
-        say "downloading Zig $BA_ZIG_VERSION for $td_plat (about 55 MB)..."
-        # BA_TEST_MIRRORS replaces the sources; the test suite uses it to
-        # check that a corrupted download is rejected.
-        td_srcs=${BA_TEST_MIRRORS:-"$(zig_mirrors) https://ziglang.org/download/$BA_ZIG_VERSION"}
-        for td_m in $td_srcs; do
-            case $td_m in
-            https://ziglang.org/*|file://*) td_url=$td_m/$td_file ;;
-            *) td_url=$td_m/$td_file?source=build-anywhere ;;
-            esac
-            vsay "fetching $td_url"
-            ba_fetch "$td_url" "$td_arch" || continue
-            td_got=$(ba_sha256 "$td_arch") || { say "download: could not hash $td_file"; return 1; }
-            if [ "$td_got" = "$td_sha" ]; then
-                td_ok=1
-                break
-            fi
-            say "download: checksum mismatch from ${td_m%%/zig*}, trying another source"
-        done
-        [ "$td_ok" = 1 ] || { say "download: could not get a verified copy of $td_file"; return 1; }
-
-        mkdir -p "$BA_CACHE" || return 1
-        td_x=$BA_CACHE/.unpack.$$
-        rm -rf "$td_x"; mkdir -p "$td_x" || return 1
-        if ! untar_xz "$td_arch" "$td_x" || [ ! -x "$td_x/$td_name/zig" ]; then
-            rm -rf "$td_x"
-            say "download: could not unpack $td_file"
-            return 1
+    td_nl='
+'
+    td_ifs=$IFS
+    IFS=$td_nl
+    for td_line in $td_list; do
+        IFS=$td_ifs
+        # shellcheck disable=SC2086
+        set -- $td_line
+        td_top=$5 td_gcc=$6 td_needs=$7
+        td_dir=$BA_CACHE/toolchain-$td_top
+        if [ "$td_needs" != - ] && [ ! -e "$td_needs" ]; then
+            vsay "download: $4 needs $td_needs, which this system lacks"
+            continue
         fi
-        rm -rf "$td_dir"
-        mv "$td_x/$td_name" "$td_dir" && rm -rf "$td_x" || return 1
-        rm -f "$td_arch"
-    fi
-
-    zig_write_wrapper "$td_dir" || return 1
-    if probe_cc "$(q "$BA_CACHE/bin/cc-zig")"; then
-        BA_CC=$(q "$BA_CACHE/bin/cc-zig")
-        BA_CC_DESC="Zig $BA_ZIG_VERSION (downloaded)"
-        return 0
-    fi
+        if [ ! -x "$td_dir/$td_gcc" ]; then
+            ba_lock download downloading || return 1
+            td_algo=$2 td_sum=$3 td_file=$4
+            shift 7
+            toolchain_get "$td_algo" "$td_sum" "$td_file" "$td_top" "$td_gcc" "$@"
+            td_st=$?
+            ba_unlock
+            [ "$td_st" = 0 ] || continue
+        fi
+        td_w=$(toolchain_wrapper "$td_dir" "$td_gcc") || return 1
+        if probe_cc "$(q "$td_w")"; then
+            BA_CC=$(q "$td_w")
+            BA_CC_DESC="downloaded gcc ($td_top)"
+            return 0
+        fi
+        vsay "download: $td_top does not work on this system"
+    done
+    IFS=$td_ifs
     return 1
 }
 
@@ -448,7 +682,7 @@ pick_shell() {
 }
 
 # ---------------------------------------------------------------------------
-# Tier 3: bootstrap TCC from the shell.
+# Tier 4: bootstrap TCC from the shell.
 
 bootstrap_supported() {
     [ "$BA_OS" = linux ] || return 1
@@ -456,17 +690,19 @@ bootstrap_supported() {
     return 1
 }
 
-# Only one bootstrap at a time per cache: others wait for it to finish.
-bootstrap_lock() {
-    bl_dir=$BA_CACHE/.bootstrap-lock
+# ba_lock NAME WHAT: one build-anywhere at a time may do WHAT (bootstrapping,
+# downloading) in this cache; the others wait.
+ba_lock() {
+    bl_dir=$BA_CACHE/.$1-lock
     bl_waited=0
+    mkdir -p "$BA_CACHE" || return 1
     while ! mkdir "$bl_dir" 2>/dev/null; do
         bl_pid=$(cat "$bl_dir/pid" 2>/dev/null || :)
         if [ -n "$bl_pid" ] && ! kill -0 "$bl_pid" 2>/dev/null; then
             rm -rf "$bl_dir"        # left behind by a process that died
             continue
         fi
-        [ "$bl_waited" = 0 ] && say "waiting for another build-anywhere to finish bootstrapping..."
+        [ "$bl_waited" = 0 ] && say "waiting for another build-anywhere to finish $2..."
         bl_waited=$((bl_waited + 1))
         [ "$bl_waited" -lt 1800 ] || { say "gave up waiting for $bl_dir"; return 1; }
         sleep 1
@@ -474,8 +710,7 @@ bootstrap_lock() {
     echo $$ >"$bl_dir/pid"
     BA_LOCKED=$bl_dir
 }
-
-bootstrap_unlock() {
+ba_unlock() {
     if [ -n "${BA_LOCKED:-}" ]; then rm -rf "$BA_LOCKED"; fi
     BA_LOCKED=
 }
@@ -489,7 +724,7 @@ tier_bootstrap() {
     tb_dir=$BA_CACHE/tcc-$BA_ARCH-linux-$BA_VERSION
     if [ ! -x "$tb_dir/bin/cc" ]; then
         mkdir -p "$BA_CACHE" || return 1
-        bootstrap_lock || return 1
+        ba_lock bootstrap bootstrapping || return 1
         if [ ! -x "$tb_dir/bin/cc" ]; then
             tb_sh=$(pick_shell)
             if [ -d "$BA_CACHE/work-tcc-$BA_ARCH" ]; then
@@ -502,13 +737,13 @@ tier_bootstrap() {
                 --arch "$BA_ARCH" --shell "$tb_sh" --seed "$BA_SEED" \
                 --libc "$BA_HOME/libc" --out "$tb_dir" --work "$BA_CACHE/work-tcc-$BA_ARCH"
             then
-                bootstrap_unlock
+                ba_unlock
                 say "bootstrap failed (see the output above)"
                 return 1
             fi
             rm -rf "$BA_CACHE/work-tcc-$BA_ARCH"
         fi
-        bootstrap_unlock
+        ba_unlock
     fi
     if probe_cc "$(q "$tb_dir/bin/cc")"; then
         BA_CC=$(q "$tb_dir/bin/cc")
@@ -519,7 +754,7 @@ tier_bootstrap() {
 }
 
 # ---------------------------------------------------------------------------
-# Tier 4: compile the program to a shell script with pnut.
+# Tier 5: compile the program to a shell script with pnut.
 
 tier_shell() {
     [ -f "$BA_SEED/pnut-sh.sh" ] || { vsay "shell: seed/ is missing"; return 1; }
@@ -548,8 +783,8 @@ acquire_cc() {
     for ac_t in $BA_TIERS; do
         IFS=$ac_ifs
         case $ac_t in
-        system|download|bootstrap|shell) ;;
-        *) die "unknown tier '$ac_t' (expected system, download, bootstrap or shell)" ;;
+        system|package|download|bootstrap|shell) ;;
+        *) die "unknown tier '$ac_t' (expected system, package, download, bootstrap or shell)" ;;
         esac
         vsay "trying tier: $ac_t"
         if tier_$ac_t; then
@@ -569,17 +804,34 @@ doctor() {
     printf 'system:    '
     if tier_system; then printf 'ok (%s)\n' "$BA_CC"; else printf 'no working compiler installed\n'; fi
 
-    printf 'download:  '
-    dp=$(zig_platform)
-    if [ -x "$BA_CACHE/zig-$dp-$BA_ZIG_VERSION/zig" ]; then printf 'ok (Zig %s already downloaded)\n' "$BA_ZIG_VERSION"
-    elif [ -z "$(zig_sha "$dp")" ]; then printf 'unavailable (no Zig build for %s)\n' "$dp"
+    printf 'package:   '
+    dr=
+    pkg_privilege && dr=root
+    dpm=$(pkg_managers "$dr" | tr '\n' ' ')
+    if [ -n "$dpm" ]; then
+        printf 'possible (gcc or clang with %s' "${dpm% }"
+        case $dpm in *brew*|*nix*) ;; *) printf ', %s' "$PKG_HOW" ;; esac
+        printf ')\n'
+    elif [ -n "$(pkg_managers root)" ]; then
+        printf 'unavailable (%s needs root: run as root, or allow sudo/doas)\n' "$(pkg_managers root | sed -n 1p)"
     else
-        dm=
-        have_fetcher || dm="$dm no downloader (curl/wget/fetch/ftp);"
-        have_sha256 || dm="$dm no SHA-256 tool;"
-        have_unxz || dm="$dm no xz unpacker;"
-        if [ -z "$dm" ]; then printf 'possible (Zig %s for %s, needs network)\n' "$BA_ZIG_VERSION" "$dp"
-        else printf 'unavailable:%s\n' "${dm%;}"; fi
+        printf 'unavailable (no supported package manager)\n'
+    fi
+
+    printf 'download:  '
+    dl=$(toolchains)
+    if [ -z "$dl" ]; then printf 'unavailable (no prebuilt toolchain for %s %s)\n' "$BA_ARCH" "$BA_OS"
+    else
+        set -- $dl
+        if [ -x "$BA_CACHE/toolchain-$5/$6" ]; then printf 'ok (%s already downloaded)\n' "$5"
+        else
+            dm=
+            have_fetcher || dm="$dm no downloader (curl/wget/fetch/ftp);"
+            have_hash "$2" || dm="$dm no $2 tool;"
+            have_unpacker "$4" || dm="$dm cannot unpack $4;"
+            if [ -z "$dm" ]; then printf 'possible (gcc %s, about 90 MB, needs network)\n' "$5"
+            else printf 'unavailable:%s\n' "${dm%;}"; fi
+        fi
     fi
 
     printf 'bootstrap: '
@@ -601,7 +853,7 @@ usage() {
 # Main
 
 BA_VERBOSE=${BA_VERBOSE:-0}
-BA_TIERS=${BA_TIERS:-system,download,bootstrap,shell}
+BA_TIERS=${BA_TIERS:-system,package,download,bootstrap,shell}
 BA_CACHE=${BA_CACHE:-${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/build-anywhere}
 BA_MODE=build
 BA_ARGS=
@@ -634,8 +886,8 @@ BA_TMP=${TMPDIR:-/tmp}/build-anywhere.$$
 rm -rf "$BA_TMP"
 (umask 077 && mkdir "$BA_TMP") || die "cannot create $BA_TMP"
 BA_LOCKED=
-trap 'rm -rf "$BA_TMP"; bootstrap_unlock' EXIT
-trap 'rm -rf "$BA_TMP"; bootstrap_unlock; exit 130' INT TERM
+trap 'rm -rf "$BA_TMP"; ba_unlock' EXIT
+trap 'rm -rf "$BA_TMP"; ba_unlock; exit 130' INT TERM
 : >"$BA_TMP/log"
 
 case $BA_MODE in

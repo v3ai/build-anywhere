@@ -10,8 +10,14 @@ vendored sources under `seed/pnut/`, `seed/pnut-sh.sh` and `seed/tcc/`.
 
 ## What a program built by each tier contains
 
-- **system** and **download**: whatever that compiler and its C library
+- **system** and **package**: whatever that compiler and its C library
   normally put in a program. build-anywhere adds nothing.
+- **download**: the downloaded gcc links programs statically with
+  [musl](https://musl.libc.org) (MIT) and gcc's `libgcc` (GPL with the GCC
+  runtime-library exception, which puts no conditions on your program).
+  The toolchains come from [musl.cc](https://musl.cc) and
+  [cross-tools/musl-cross](https://github.com/cross-tools/musl-cross);
+  they are downloaded, never stored in this repository.
 - **bootstrap**: the program is linked statically with
   - the build-anywhere libc (`libc/`, MIT), written for this project;
   - TinyCC's `lib/libtcc1.c` (helpers for `long long` and float

@@ -20,16 +20,118 @@ jobs:
       - name: Test every quick tier under every shell
         run: BA_TEST_SHELL_TIER=1 sh tests/run.sh
 
-  download:
+  # The package tier for real: containers that start without a C compiler,
+  # as root. build-anywhere must install one with the package manager.
+  package:
+    name: package (${{ matrix.image }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+        image:
+          - debian:stable-slim                    # apt-get, no package lists yet
+          - ubuntu:24.04                          # apt-get
+          - fedora:latest                         # dnf
+          - almalinux:9-minimal                   # microdnf
+          - amazonlinux:2023                      # dnf
+          - opensuse/leap:15.6                    # zypper
+          - opensuse/tumbleweed:latest            # zypper
+          - alpine:latest                         # apk
+          - archlinux:latest                      # pacman, no package database yet
+          - ghcr.io/void-linux/void-glibc:latest  # xbps-install
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
     steps:
       - uses: actions/checkout@v4
-      - name: Download Zig and build with it
-        run: BA_TEST_DOWNLOAD=1 sh tests/run.sh sh
+      - name: No C compiler is installed
+        run: "! command -v cc && ! command -v gcc && ! command -v clang"
+      - name: Build with the default tiers
+        run: |
+          sh build-anywhere -o hello examples/hello/hello.c 2>err || { cat err; exit 1; }
+          cat err
+          grep -q "installing gcc with" err
+          grep -q "compiling with gcc from" err
+          test "$(./hello pkg)" = "hello, pkg"
+      - name: Build the Universal C example with the installed compiler
+        run: |
+          sh build-anywhere -O2 -o uni examples/universal/main.c examples/universal/p_util.c
+          test "$(./uni)" = "universal: ok"
+      - name: Doctor
+        run: sh build-anywhere --doctor
+
+  # Not root, but with passwordless sudo.
+  package-sudo:
+    runs-on: ubuntu-latest
+    container: debian:stable-slim
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add a user that may use sudo
+        run: |
+          apt-get update -q && apt-get install -y -q sudo
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' >/etc/sudoers.d/builder
+          cp -r . /home/builder/src && chown -R builder /home/builder/src
+          ! command -v cc
+      - name: Build as that user
+        run: |
+          su builder -c 'cd ~/src && sh build-anywhere -o hello examples/hello/hello.c' 2>err || { cat err; exit 1; }
+          cat err
+          grep -q "installing gcc with apt-get with sudo" err
+          test "$(/home/builder/src/hello sudo)" = "hello, sudo"
+
+  # Package managers that need no root.
+  package-nix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Get gcc from Nix (no root)
+        run: |
+          BA_SUDO=never sh build-anywhere --tiers=package -o hello examples/hello/hello.c 2>err || { cat err; exit 1; }
+          cat err
+          grep -q "gcc from nix: '/nix/store/" err
+          test "$(./hello nix)" = "hello, nix"
+
+  package-brew:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get gcc from Homebrew (no root)
+        run: |
+          BA_SUDO=never sh build-anywhere --tiers=package -o hello examples/hello/hello.c 2>err || { cat err; exit 1; }
+          cat err
+          grep -q "gcc from brew: " err
+          test "$(./hello brew)" = "hello, brew"
+
+  # The download tier for real, on the machines it has toolchains for.
+  download:
+    name: download (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: x86_64, runner: ubuntu-latest }
+          - { name: aarch64, runner: ubuntu-24.04-arm }
+          - { name: x86_64 alpine, runner: ubuntu-latest, image: "alpine:3.20" }
+          - { name: x86 alpine, runner: ubuntu-latest, image: "i386/alpine:3.20" }
+          - { name: armv7 alpine, runner: ubuntu-24.04-arm, image: "arm32v7/alpine:3.20" }
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.image }}
+    steps:
+      - name: Check out
+        if: matrix.image == ''
+        uses: actions/checkout@v4
+      # Without actions/checkout, which needs a node that i386 and arm32
+      # lack. This installs nothing: BusyBox has wget and tar.
+      - name: Check out (container)
+        if: matrix.image != ''
+        run: |
+          wget -qO- "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/archive/$GITHUB_SHA.tar.gz" | tar -xzf -
+          mv build-anywhere-* "$GITHUB_WORKSPACE/src"
+      - name: Download gcc and build with it
+        run: |
+          [ -d src ] && cd src
+          sh build-anywhere --doctor
+          BA_TEST_DOWNLOAD=1 sh tests/run.sh sh
 
   libc:
     runs-on: ubuntu-latest
@@ -63,3 +165,43 @@ jobs:
           cd src
           sh build-anywhere --tiers=shell -o hello.sh examples/hello/hello.c
           ./hello.sh alpine
+
+  # The BSDs, in virtual machines: the quick tiers, and on FreeBSD the
+  # package tier with pkg.
+  bsd:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [freebsd, openbsd, netbsd]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        uses: vmactions/freebsd-vm@v1
+        if: matrix.os == 'freebsd'
+        with:
+          usesh: true
+          run: |
+            sh tests/run.sh
+            sh build-anywhere --doctor
+            sh build-anywhere --tiers=package -o hello examples/hello/hello.c 2>err || { cat err; exit 1; }
+            cat err
+            grep -q "gcc from pkg: 'gcc" err
+            test "$(./hello pkg)" = "hello, pkg"
+      - name: Test
+        uses: vmactions/openbsd-vm@v1
+        if: matrix.os == 'openbsd'
+        with:
+          usesh: true
+          run: |
+            sh tests/run.sh
+            sh build-anywhere --doctor
+      - name: Test
+        uses: vmactions/netbsd-vm@v1
+        if: matrix.os == 'netbsd'
+        with:
+          usesh: true
+          run: |
+            sh tests/run.sh
+            sh build-anywhere --doctor
