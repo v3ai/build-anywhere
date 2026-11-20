@@ -203,10 +203,16 @@ ST_FUNC int tcc_tool_ar(TCCState *s1, int argc, char **argv)
             for (i = 1; i < nsym; i++)
             {
                 sym = (ElfW(Sym) *) (symtab + i * sizeof(ElfW(Sym)));
+                /* build-anywhere: also index weak definitions (0x2X), as
+                   TinyCC 0.9.28 and GNU ar do; musl defines many public
+                   functions as weak aliases. */
                 if (sym->st_shndx &&
                     (sym->st_info == 0x10
                     || sym->st_info == 0x11
                     || sym->st_info == 0x12
+                    || sym->st_info == 0x20
+                    || sym->st_info == 0x21
+                    || sym->st_info == 0x22
                     )) {
                     //printf("symtab: %2Xh %4Xh %2Xh %s\n", sym->st_info, sym->st_size, sym->st_shndx, strtab + sym->st_name);
                     istrlen = strlen(strtab + sym->st_name)+1;

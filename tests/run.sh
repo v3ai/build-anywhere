@@ -423,16 +423,16 @@ if [ "${BA_TEST_BOOTSTRAP:-0}" = 1 ]; then
     rm -f "$T/smoke"
     sh "$BA" --tiers=bootstrap --cache="$c" -o "$T/smoke" tests/libc/smoke.c 2>"$T/stderr"
     expect "bootstrap: libc smoke test" "smoke: ok" "$T/smoke"
-    # The libc's math and number formatting must give the same bits on every
-    # architecture (on i386 that needs the x87 set to double precision).
+    # musl: sockets, select, termios, fork, directories, <linux/*.h>.
+    rm -f "$T/posix"
+    sh "$BA" --tiers=bootstrap --cache="$c" -o "$T/posix" tests/libc/posix.c 2>"$T/stderr" ||
+        sed 's/^/      /' "$T/stderr" | tail -n 10
+    expect "bootstrap: POSIX interfaces (musl)" "posix: ok" "$T/posix"
+    # musl's math within 2 ULP of glibc, printf and strtod exactly the same.
     rm -f "$T/mathcmp"
     sh "$BA" --tiers=bootstrap --cache="$c" -o "$T/mathcmp" tests/libc/mathcmp.c 2>"$T/stderr"
-    if "$T/mathcmp" >"$T/mathcmp.out" 2>&1 && cmp -s "$T/mathcmp.out" tests/libc/mathcmp.golden; then
-        ok "bootstrap: math output matches the golden file"
-    else
-        bad "bootstrap: math output differs from tests/libc/mathcmp.golden"
-        diff "$T/mathcmp.out" tests/libc/mathcmp.golden | head -n 6
-    fi
+    expect "bootstrap: math and number formatting match glibc" "mathcmp: ok" \
+        "$T/mathcmp" tests/libc/mathcmp.golden
 else
     skip "bootstrap: (set BA_TEST_BOOTSTRAP=1; about 5 minutes)"
 fi

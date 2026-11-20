@@ -1,0 +1,20 @@
+# Linux UAPI headers vendored into seed/linux-headers (with everything they
+# include). tools/vendor-musl.sh reads this list. The full set is about 6 MB;
+# these cover devices (USB, serial, input, HID, I2C, SPI, GPIO, CAN, framebuffer,
+# sound), networking (interfaces, netlink, sockets) and the core types.
+linux/usbdevice_fs.h linux/usb/ch9.h linux/serial.h linux/serial_reg.h
+linux/tty.h linux/tiocl.h linux/input.h linux/uinput.h linux/hidraw.h
+linux/hiddev.h linux/joystick.h linux/i2c-dev.h linux/i2c.h linux/spi/spidev.h
+linux/gpio.h linux/can.h linux/can/raw.h linux/can/bcm.h linux/can/error.h
+linux/if.h linux/if_tun.h linux/if_ether.h linux/if_packet.h linux/if_arp.h
+linux/netlink.h linux/rtnetlink.h linux/sockios.h linux/socket.h
+linux/fs.h linux/limits.h linux/version.h linux/random.h linux/kd.h linux/vt.h
+linux/fb.h linux/major.h linux/errno.h linux/ioctl.h linux/types.h linux/stat.h
+linux/fcntl.h linux/inotify.h linux/memfd.h linux/futex.h linux/sched.h
+linux/prctl.h linux/capability.h linux/seccomp.h linux/filter.h linux/time.h
+linux/mount.h linux/loop.h linux/watchdog.h linux/rtc.h linux/soundcard.h
+linux/falloc.h linux/kdev_t.h linux/reboot.h linux/stddef.h linux/const.h
+linux/posix_types.h linux/signal.h linux/termios.h linux/unistd.h
+linux/utsname.h linux/magic.h linux/uio.h linux/poll.h linux/eventpoll.h
+linux/ppdev.h linux/parport.h linux/kernel.h linux/sysinfo.h linux/auxvec.h
+linux/elf.h asm/unistd.h asm/ioctls.h asm/termbits.h asm/byteorder.h

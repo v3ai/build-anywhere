@@ -1,0 +1,40 @@
+/* build-anywhere: <stdarg.h> for TinyCC, which has no __builtin_va_list
+ * on Linux. Same layout and helpers as TinyCC's own <stdarg.h>. */
+#if defined(__TINYC__) && !defined(__TINYC_va_list)
+#define __TINYC_va_list
+typedef struct {
+	unsigned int __gp_offset;
+	unsigned int __fp_offset;
+	char *__overflow_arg_area;
+	char *__reg_save_area;
+} __tcc_va_list_struct;
+typedef __tcc_va_list_struct __builtin_va_list[1];
+void __va_start(__tcc_va_list_struct *, void *);
+void *__va_arg(__tcc_va_list_struct *, int, int, int);
+#define __builtin_va_start(ap, last) __va_start(ap, __builtin_frame_address(0))
+#define __builtin_va_arg(ap, type) \
+	(*(type *)(__va_arg(ap, __builtin_va_arg_types(type), sizeof(type), __alignof__(type))))
+#define __builtin_va_copy(dest, src) (*(dest) = *(src))
+#define __builtin_va_end(ap)
+#endif
+
+#define _Addr long
+#define _Int64 long
+#define _Reg long
+
+#define __BYTE_ORDER 1234
+#define __LONG_MAX 0x7fffffffffffffffL
+
+#ifndef __cplusplus
+TYPEDEF int wchar_t;
+#endif
+
+#if defined(__FLT_EVAL_METHOD__) && __FLT_EVAL_METHOD__ == 2
+TYPEDEF long double float_t;
+TYPEDEF long double double_t;
+#else
+TYPEDEF float float_t;
+TYPEDEF double double_t;
+#endif
+
+TYPEDEF struct { long long __ll; long double __ld; } max_align_t;

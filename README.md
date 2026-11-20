@@ -25,7 +25,7 @@ test program:
 | **system** | Uses an installed compiler: `$CC`, `cc`, `c99`, `gcc`, `clang`, `tcc`, `pcc`, `cproc`, ... | a compiler | instant | native program |
 | **package** | Installs gcc (or clang, if gcc can't be installed) with the system's package manager: `apt-get`, `dnf`, `yum`, `tdnf`, `zypper`, `apk`, `pacman`, `xbps-install`, FreeBSD `pkg`, Homebrew, Nix or Termux, or the Command Line Tools on macOS. | network, and root, passwordless `sudo`/`doas`, or a terminal to type a password in (Homebrew, Nix and Termux need none) | ~10-60 s | native program |
 | **download** | Downloads a prebuilt gcc for Linux (static, with musl) and keeps it in the cache. The archive is checked against a SHA-256 or SHA-512 pinned in the script before anything in it runs. | Linux on x86_64, x86, arm64, armv6/armv7 or ppc64le; network; `curl`, `wget` or BusyBox; a hash tool; about 1 GB of disk | ~30 s | native static program |
-| **bootstrap** | Builds TinyCC from source, starting from a C compiler written in shell. | x86 or x86_64 Linux, any POSIX shell | ~4-5 min, once | native static program |
+| **bootstrap** | Builds TinyCC from source, starting from a C compiler written in shell, then the musl C library with it. | x86 or x86_64 Linux, any POSIX shell | ~4-5 min, once | native static program |
 | **shell** | Compiles your program *into a shell script* with [pnut](https://github.com/udem-dlteam/pnut). | any POSIX shell | seconds | shell script (subset of C) |
 
 Compilers that build-anywhere downloads or builds (the prebuilt gcc,
@@ -59,7 +59,7 @@ make CC="$CC"
 
 ```
 $ sh build-anywhere/build-anywhere --doctor
-build-anywhere 0.1.0 on x86_64 linux
+build-anywhere 0.2.0 on x86_64 linux
 cache: /home/me/.cache/build-anywhere
 
 system:    ok (cc)
@@ -127,12 +127,14 @@ This tier needs nothing but a shell. The chain is:
    `pnut` executable. (~3 minutes with dash)
 3. The native pnut recompiles itself with every feature on, then compiles
    TinyCC 0.9.27.
-4. TinyCC rebuilds the C library and itself, four times. The last two
-   compilers must be byte-identical (a *fixed point*), which shows that the
-   chain converged. This takes a few seconds.
+4. TinyCC rebuilds itself, with a small C library of its own (`libc/`), four
+   times. The last two compilers must be byte-identical (a *fixed point*),
+   which shows that the chain converged. This takes a few seconds.
+5. The final TinyCC builds musl, a complete C library, from `seed/musl`
+   (a few seconds; no `make` is needed).
 
-The result is a static TinyCC with its own C library in
-`~/.cache/build-anywhere/tcc-x86_64-linux-0.1.0/`. The shell work is saved as it
+The result is a static TinyCC with musl in
+`~/.cache/build-anywhere/tcc-x86_64-linux-0.2.0/`. The shell work is saved as it
 goes, so an interrupted bootstrap resumes where it stopped. The fastest
 installed shell is used (dash, ksh, mksh, yash, bash, then `/bin/sh`), and
 `BA_SHELL` overrides the choice.
@@ -140,23 +142,39 @@ installed shell is used (dash, ksh, mksh, yash, bash, then `/bin/sh`), and
 ### The C library
 
 Programs built by the bootstrapped TinyCC are linked statically against
-`libc/`. This is a small C89 library (plus the POSIX calls that TinyCC
-itself needs) written for this project under the MIT license, so your
-program carries no copyleft code. Its formatting and math are checked
-against glibc: `tests/libc/run.sh` runs 5.8 million comparisons, with the
-library compiled by gcc and again by the bootstrapped TinyCC.
+[musl](https://musl.libc.org) 1.2.5, the MIT-licensed C library of Alpine
+Linux, so your program carries no copyleft code. It is the whole library,
+not a subset:
 
-- `printf("%.17g")` and `strtod` are exact and correctly rounded (arbitrary
-  precision, ties to even), including hex floats and subnormals.
-- `sqrt` is correctly rounded; `exp`, `log`, `pow` and `atan` are within
-  1 ULP of glibc, and the rest of `<math.h>` within 3 ULP.
-- Buffered stdio, `malloc`, `qsort`, `setjmp`, `signal`, `system`, `time`,
-  `strftime` and the rest of C89 are included. Local time is UTC (there is
-  no time-zone database), and the only locale is `"C"`.
-- On i386, programs start with the x87 FPU set to double precision (as on
-  FreeBSD), so floating-point results are bit-for-bit the same as on x86_64
-  (`tests/libc/mathcmp.golden` checks this). As a consequence, `long double`
-  has the precision of `double` there.
+- all of C89, C99 and C11 (`<math.h>`, `<fenv.h>`, `<wchar.h>`, `<stdint.h>`,
+  ...), except complex numbers, which TinyCC does not support;
+- POSIX: sockets (`<sys/socket.h>`, `<netdb.h>`, `<arpa/inet.h>`, ...),
+  `select`/`poll`, terminals (`<termios.h>`, `openpty`), threads
+  (`<pthread.h>`), processes, signals, directories, shared memory,
+  `mmap`, and the rest;
+- 134 Linux kernel headers (`<linux/usbdevice_fs.h>`, `<linux/serial.h>`,
+  `<linux/input.h>`, `<linux/can.h>`, `<linux/netlink.h>`, ...; the list is
+  in `tools/linux-headers.list`).
+
+`seed/musl` is musl's source for i386 and x86_64 with a few changes for
+TinyCC 0.9.27 (`tools/patches/musl-1.2.5-tcc.patch`): no register variables
+in the system-call wrappers, some x87/SSE inline assembly replaced by musl's
+portable C, and a few instructions that TinyCC's assembler lacks written as
+bytes. TinyCC itself carries three fixes backported from later versions
+(`tools/patches/tcc-0.9.27-build-anywhere.patch`).
+
+The tests check musl against glibc: `printf("%.17g")` and `strtod` give
+identical results, and the maths functions are within 2 ULP (i386 evaluates
+in x87 extended precision, so its last bit can differ from x86_64's). As a
+real-world check, [clibretune](https://github.com/v3ai/clibretune), a
+221-file GUI application, builds and passes all 81 of its test programs on
+x86_64 and i386 with the bootstrapped compiler and no other compiler on the
+machine.
+
+`libc/` is a small C89 library written for this project. It is only used to
+build TinyCC itself during the bootstrap (musl cannot be compiled by the
+first TinyCC, which pnut compiled without floating point), and on x86_64 its
+`<stdarg.h>` support routine goes into musl's `libc.a`.
 
 ## The shell tier
 
@@ -212,7 +230,7 @@ shells of macOS, FreeBSD, OpenBSD and NetBSD.
 sh tests/run.sh                     # every tier that is quick, under every installed shell
 BA_TEST_BOOTSTRAP=1 sh tests/run.sh # also the full bootstrap (~5 minutes)
 BA_TEST_DOWNLOAD=1 sh tests/run.sh  # also a real download of a prebuilt gcc
-sh tests/libc/run.sh                # the libc against glibc (needs gcc and objcopy)
+sh tests/libc/run.sh                # libc/ against glibc (needs gcc and objcopy)
 ```
 
 ## Prior art
@@ -223,7 +241,11 @@ build-anywhere stands on these projects:
   a C compiler that emits readable POSIX shell, and the shell-to-TinyCC
   bootstrap path. Its bootstrap kit provided the TinyCC patches and
   build order used here. build-anywhere replaces the kit's GNU Mes libc
-  with an MIT library, so programs are not GPL-encumbered.
+  with a small MIT library for building TinyCC, and links programs with
+  musl, so they are not GPL-encumbered.
+- **[musl](https://musl.libc.org)**: the C library of programs built by the
+  bootstrap tier. live-bootstrap's recipe for building musl with TinyCC
+  showed which parts need changes.
 - **[TinyCC](https://repo.or.cz/tinycc.git)**: the small, fast compiler at
   the end of the bootstrap.
 - **[live-bootstrap](https://github.com/fosslinux/live-bootstrap)** and

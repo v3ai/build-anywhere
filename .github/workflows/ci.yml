@@ -156,7 +156,18 @@ jobs:
       - name: No C compiler is installed
         run: "! command -v cc && ! command -v gcc"
       - name: Bootstrap a compiler from BusyBox sh and build the examples
-        run: cd src && BA_TEST_BOOTSTRAP=1 BA_TEST_SHELL_TIER=1 sh tests/run.sh
+        run: cd src && BA_TEST_BOOTSTRAP=1 BA_TEST_SHELL_TIER=1 BA_TEST_CACHE=$PWD/../ba-cache sh tests/run.sh
+      # A real program: a 221-file GUI application with 81 test programs
+      # (sockets, serial ports, threads, floating point, <linux/*.h>).
+      - name: Build and test clibretune with the bootstrapped compiler
+        run: |
+          git clone --depth 1 https://github.com/v3ai/clibretune
+          CC=$(sh src/build-anywhere --tiers=bootstrap --cache=$PWD/ba-cache --cc)
+          echo "CC=$CC"
+          cd clibretune
+          CC=$CC ./build.sh app
+          ./build/libretune --version
+          CC=$CC ./build.sh test
       - name: Shell tier without any compiler
         run: |
           cd src

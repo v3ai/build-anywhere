@@ -1,0 +1,43 @@
+/* build-anywhere: <stdarg.h> for TinyCC, which has no __builtin_va_list
+ * on Linux. Same definitions as TinyCC's own <stdarg.h>. */
+#if defined(__TINYC__) && !defined(__TINYC_va_list)
+#define __TINYC_va_list
+typedef char *__builtin_va_list;
+#define __builtin_va_start(ap, last) ((ap) = ((char *)&(last)) + ((sizeof(last) + 3) & ~3))
+#define __builtin_va_arg(ap, type) \
+	((ap) += (sizeof(type) + 3) & ~3, *(type *)((ap) - ((sizeof(type) + 3) & ~3)))
+#define __builtin_va_copy(dest, src) ((dest) = (src))
+#define __builtin_va_end(ap)
+#endif
+
+#define _REDIR_TIME64 1
+#define _Addr int
+#define _Int64 long long
+#define _Reg int
+
+#define __BYTE_ORDER 1234
+#define __LONG_MAX 0x7fffffffL
+
+#ifndef __cplusplus
+#ifdef __WCHAR_TYPE__
+TYPEDEF __WCHAR_TYPE__ wchar_t;
+#else
+TYPEDEF long wchar_t;
+#endif
+#endif
+
+#if defined(__FLT_EVAL_METHOD__) && __FLT_EVAL_METHOD__ == 0
+TYPEDEF float float_t;
+TYPEDEF double double_t;
+#else
+TYPEDEF long double float_t;
+TYPEDEF long double double_t;
+#endif
+
+#if !defined(__cplusplus)
+TYPEDEF struct { _Alignas(8) long long __ll; long double __ld; } max_align_t;
+#elif defined(__GNUC__)
+TYPEDEF struct { __attribute__((__aligned__(8))) long long __ll; long double __ld; } max_align_t;
+#else
+TYPEDEF struct { alignas(8) long long __ll; long double __ld; } max_align_t;
+#endif

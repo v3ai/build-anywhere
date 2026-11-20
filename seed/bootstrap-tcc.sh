@@ -12,12 +12,15 @@
 #   3. That pnut-exe recompiles pnut with every feature on (twice: the
 #      minimal pnut ignores -D values such as the heap size).
 #   4. pnut-exe compiles TinyCC 0.9.27 (with pnut's small libc): tcc-pnut.
-#   5. Each TinyCC compiles the build-anywhere libc and the next TinyCC:
+#   5. Each TinyCC compiles the build-anywhere libc (LIBC, a small C library
+#      that is enough for TinyCC itself) and the next TinyCC:
 #      tcc-pnut -> boot0 -> boot1 -> boot2 -> boot3. boot2 and boot3 must be
 #      byte-identical (a fixed point), which shows the chain converged.
+#   6. The final TinyCC builds musl (SEED/musl), a complete C library, for
+#      the programs it compiles; SEED/linux-headers adds <linux/*.h>.
 #
 # Installs OUT/bin/tcc, OUT/lib (crt files, libc.a, libtcc1.a, include/)
-# and OUT/bin/cc, a cc-compatible wrapper. Steps 1-3 are kept in WORK, so
+# and OUT/bin/cc, a cc-compatible wrapper. Steps 1-4 are kept in WORK, so
 # an interrupted run resumes after the last finished step.
 set -eu
 
@@ -64,13 +67,13 @@ PNUT_FULL="$PNUT_OPTS -DUNDEFINED_LABELS_ARE_RUNTIME_ERRORS -DENABLE_PNUT_INLINE
 
 # ---- 1-3: pnut ----------------------------------------------------------
 if [ ! -f step1.done ]; then
-    say "[1/5] compiling pnut to x86 with pnut-sh.sh, in $SH (about 1 minute)"
+    say "[1/6] compiling pnut to x86 with pnut-sh.sh, in $SH (about 1 minute)"
     "$SH" "$SEED/pnut-sh.sh" "$P/pnut.c" $PNUT_OPTS -DPNUT_BOOTSTRAP >pnut-exe.sh.tmp
     mv pnut-exe.sh.tmp pnut-exe.sh
     : >step1.done
 fi
 if [ ! -f step2.done ]; then
-    say "[2/5] running pnut-exe.sh to make a native pnut (about 3 minutes)"
+    say "[2/6] running pnut-exe.sh to make a native pnut (about 3 minutes)"
     rm -f pnut-exe-min
     # pnut-exe.sh cannot set the execute bit itself: create the file first.
     : >pnut-exe-min
@@ -79,7 +82,7 @@ if [ ! -f step2.done ]; then
     : >step2.done
 fi
 if [ ! -f step3.done ]; then
-    say "[3/5] rebuilding pnut with all features"
+    say "[3/6] rebuilding pnut with all features"
     # The minimal pnut ignores -D values, so the heap sizes only take effect
     # when the full pnut compiles itself once more.
     ./pnut-exe-min "$P/pnut.c" $PNUT_FULL -o pnut-exe0
@@ -105,7 +108,7 @@ set -- \
     -DTCC_LIBTCC1='"libtcc1.a"'
 
 if [ ! -x tcc-pnut ]; then
-    say "[4/5] compiling TinyCC with pnut"
+    say "[4/6] compiling TinyCC with pnut"
     ./pnut-exe "$T/tcc.c" $TCC_CONFIG -DPNUT_CC=1 -D__intptr_t_defined=1 "$@" \
         $RT -I "$P/portable_libc/include/" "$P/portable_libc/libc.c" -o tcc-pnut.tmp
     chmod 755 tcc-pnut.tmp
@@ -148,7 +151,7 @@ stage() { # PREV_CC NAME
         "$@" "$T/tcc.c" -o "tcc-$name"
 }
 
-say "[5/5] rebuilding TinyCC with itself until it reaches a fixed point"
+say "[5/6] rebuilding TinyCC with itself until it reaches a fixed point"
 prev=./tcc-pnut
 for s in boot0 boot1 boot2 boot3; do
     stage "$prev" "$s" "$@"
@@ -158,15 +161,27 @@ cmp tcc-boot2 tcc-boot3 >/dev/null ||
     die "TinyCC did not reach a fixed point (tcc-boot2 and tcc-boot3 differ)"
 ./tcc-boot3 -v >/dev/null 2>&1 || die "the final TinyCC does not run"
 
+# ---- 6: musl -----------------------------------------------------------
+say "[6/6] building the C library (musl) with TinyCC"
+rm -rf musl-lib
+"$SH" "$SEED/build-musl.sh" --arch "$ARCH" --cc ./tcc-boot3 --src "$SEED/musl" \
+    --tcc "$T" --balibc "$LIBC" --out musl-lib --work musl-work >/dev/null
+cp -R "$SEED/linux-headers/." musl-lib/include/
+rm -f musl-lib/include/README.sabotage.md
+rm -rf musl-work
+printf '#include <stdio.h>\n#include <math.h>\nint main(void){printf("%%.3f\\n",sqrt(2.0));return 0;}\n' >musl-check.c
+./tcc-boot3 -B musl-lib -static musl-check.c -o musl-check ||
+    die "TinyCC cannot link a program with musl"
+[ "$(./musl-check)" = 1.414 ] || die "a program linked with musl does not run"
+
 # ---- install ------------------------------------------------------------
 rm -rf "$OUT/bin" "$OUT/lib"
 mkdir -p "$OUT/bin"
 cp tcc-boot3 "$OUT/bin/tcc"
-cp -R boot3-lib "$OUT/lib"
-rm -rf "$OUT/lib/obj"
+cp -R musl-lib "$OUT/lib"
 {
     echo '#!/bin/sh'
-    echo '# cc wrapper for TinyCC built by build-anywhere (static, build-anywhere libc).'
+    echo '# cc wrapper for TinyCC built by build-anywhere (static, musl).'
     echo "exec $(q "$OUT/bin/tcc") -B $(q "$OUT/lib") -static \"\$@\""
 } >"$OUT/bin/cc.tmp"
 chmod 755 "$OUT/bin/cc.tmp"

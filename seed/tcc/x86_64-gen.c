@@ -339,6 +339,18 @@ static void gen_modrm64(int opcode, int op_reg, int r, Sym *sym, int c)
 }
 
 
+/* build-anywhere: the value of an SSE float compare (flags 0x100, see
+   gen_opf) when its operands are unordered (a NaN): true only for !=, and
+   the opposite if the compare was negated by '!' (flag 0x200, which also
+   turned != into ==). Fixed upstream after 0.9.27 by tracking the original
+   comparison. */
+static int ba_unordered_true(int fc)
+{
+    if (fc & 0x200)
+        return (fc & 0xff) != TOK_EQ;
+    return (fc & 0xff) == TOK_NE;
+}
+
 /* load 'r' from value 'sv' */
 void load(int r, SValue *sv)
 {
@@ -478,7 +490,7 @@ void load(int r, SValue *sv)
             gen_modrm(r, VT_LOCAL, sv->sym, fc);
         } else if (v == VT_CMP) {
             orex(0,r,0,0);
-	    if ((fc & ~0x100) != TOK_NE)
+	    if (!(fc & 0x100) || !ba_unordered_true(fc))
               oad(0xb8 + REG_VALUE(r), 0); /* mov $0, r */
 	    else
               oad(0xb8 + REG_VALUE(r), 1); /* mov $1, r */
@@ -486,8 +498,9 @@ void load(int r, SValue *sv)
 	      {
 	        /* This was a float compare.  If the parity bit is
 		   set the result was unordered, meaning false for everything
-		   except TOK_NE, and true for TOK_NE.  */
-		fc &= ~0x100;
+		   except TOK_NE, and true for TOK_NE (the other way round
+		   if the compare was negated).  */
+		fc &= ~0x300;
 		o(0x037a + (REX_BASE(r) << 8));
 	      }
             orex(0,r,0, 0x0f); /* setxx %br */
@@ -1719,8 +1732,9 @@ ST_FUNC int gtst(int inv, int t)
 	       Take care about inverting the test.  We need to jump
 	       to our target if the result was unordered and test wasn't NE,
 	       otherwise if unordered we don't want to jump.  */
-	    vtop->c.i &= ~0x100;
-            if (inv == (vtop->c.i == TOK_NE))
+	    int unordered = ba_unordered_true(vtop->c.i);
+	    vtop->c.i &= ~0x300;
+            if (inv == unordered)
 	      o(0x067a);  /* jp +6 */
 	    else
 	      {

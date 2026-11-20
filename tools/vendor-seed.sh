@@ -5,17 +5,20 @@
 #   tools/vendor-seed.sh PNUT_CHECKOUT OUT_DIR
 #
 # PNUT_CHECKOUT is a clone of https://github.com/udem-dlteam/pnut at the
-# commit recorded in seed/VERSIONS (it carries the TCC tarball and the TCC
-# patches that pnut's own bootstrap kit uses). Needs a C compiler, tar, gzip
-# and awk. Writes:
+# commit recorded in seed/README.md (it carries the TCC tarball and the TCC
+# patches that pnut's own bootstrap kit uses). Needs a C compiler, tar, gzip,
+# awk and patch. Writes:
 #
 #   OUT_DIR/pnut-sh.sh   pnut's C-to-POSIX-shell compiler, as a shell script
 #   OUT_DIR/pnut/        pnut's C sources (pnut-sh.sh is generated from these)
 #   OUT_DIR/tcc/         TinyCC 0.9.27, trimmed to x86/x86_64 Linux, with the
-#                        pnut kit's patches applied
+#                        pnut kit's patches and tools/patches/ applied
+#
+# seed/musl and seed/linux-headers come from tools/vendor-musl.sh.
 set -eu
 
 [ $# -eq 2 ] || { echo "usage: $0 PNUT_CHECKOUT OUT_DIR" >&2; exit 2; }
+HERE=$(cd "$(dirname "$0")" && pwd)
 PNUT=$(cd "$1" && pwd)
 OUT=$2
 CC=${CC:-cc}
@@ -84,6 +87,11 @@ x86_64-gen.c  x86_64_gfunc_call_vla
 tccelf.c      x86_64_static_plt_call
 tccelf.c      x86_64_static_got_reloc
 EOF
+
+# build-anywhere's own fixes, each backported from later TinyCC: index weak
+# symbols in archives (musl needs it), negated float compares with a NaN on
+# x86_64, and a register allocation bug after (int) of a double on i386.
+(cd "$OUT/tcc" && patch -s -p1 <"$HERE/patches/tcc-0.9.27-build-anywhere.patch")
 
 # The first TinyCC of the bootstrap is compiled by pnut, which has no floating
 # point, and cannot read the literal 2^64 in libtcc1.c: build it from its bits.

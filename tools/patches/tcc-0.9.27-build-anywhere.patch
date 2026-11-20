@@ -1,0 +1,111 @@
+diff -u a/i386-gen.c b/i386-gen.c
+--- a/i386-gen.c
++++ b/i386-gen.c
+@@ -1046,7 +1046,11 @@ ST_FUNC void gen_cvt_ftoi(int t)
+     gfunc_call(1);
+     vpushi(0);
+     vtop->r = REG_IRET;
+-    vtop->r2 = REG_LRET;
++    /* build-anywhere: as in later TinyCC, the high half (edx) belongs to
++       the result only for a long long: an int result must not keep edx
++       busy, or the register allocator spills wrongly (seen as a crash). */
++    if ((t & VT_BTYPE) == VT_LLONG)
++        vtop->r2 = REG_LRET;
+ }
+ 
+ /* convert from one floating point type to another */
+diff -u a/tccgen.c b/tccgen.c
+--- a/tccgen.c
++++ b/tccgen.c
+@@ -4761,9 +4761,14 @@ ST_FUNC void unary(void)
+         if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST) {
+             gen_cast_s(VT_BOOL);
+             vtop->c.i = !vtop->c.i;
+-        } else if ((vtop->r & VT_VALMASK) == VT_CMP)
++        } else if ((vtop->r & VT_VALMASK) == VT_CMP) {
+             vtop->c.i ^= 1;
+-        else {
++            /* build-anywhere: an x86_64 SSE compare (0x100) remembers that
++               it was negated (0x200), so that an unordered result (NaN)
++               is negated too: !(x >= 0) is true for x = NaN. */
++            if (vtop->c.i & 0x100)
++                vtop->c.i ^= 0x200;
++        } else {
+             save_regs(1);
+             vseti(VT_JMP, gvtst(1, 0));
+         }
+diff -u a/tcctools.c b/tcctools.c
+--- a/tcctools.c
++++ b/tcctools.c
+@@ -203,10 +203,16 @@ ST_FUNC int tcc_tool_ar(TCCState *s1, int argc, char **argv)
+             for (i = 1; i < nsym; i++)
+             {
+                 sym = (ElfW(Sym) *) (symtab + i * sizeof(ElfW(Sym)));
++                /* build-anywhere: also index weak definitions (0x2X), as
++                   TinyCC 0.9.28 and GNU ar do; musl defines many public
++                   functions as weak aliases. */
+                 if (sym->st_shndx &&
+                     (sym->st_info == 0x10
+                     || sym->st_info == 0x11
+                     || sym->st_info == 0x12
++                    || sym->st_info == 0x20
++                    || sym->st_info == 0x21
++                    || sym->st_info == 0x22
+                     )) {
+                     //printf("symtab: %2Xh %4Xh %2Xh %s\n", sym->st_info, sym->st_size, sym->st_shndx, strtab + sym->st_name);
+                     istrlen = strlen(strtab + sym->st_name)+1;
+diff -u a/x86_64-gen.c b/x86_64-gen.c
+--- a/x86_64-gen.c
++++ b/x86_64-gen.c
+@@ -339,6 +339,18 @@ static void gen_modrm64(int opcode, int op_reg, int r, Sym *sym, int c)
+ }
+ 
+ 
++/* build-anywhere: the value of an SSE float compare (flags 0x100, see
++   gen_opf) when its operands are unordered (a NaN): true only for !=, and
++   the opposite if the compare was negated by '!' (flag 0x200, which also
++   turned != into ==). Fixed upstream after 0.9.27 by tracking the original
++   comparison. */
++static int ba_unordered_true(int fc)
++{
++    if (fc & 0x200)
++        return (fc & 0xff) != TOK_EQ;
++    return (fc & 0xff) == TOK_NE;
++}
++
+ /* load 'r' from value 'sv' */
+ void load(int r, SValue *sv)
+ {
+@@ -478,7 +490,7 @@ void load(int r, SValue *sv)
+             gen_modrm(r, VT_LOCAL, sv->sym, fc);
+         } else if (v == VT_CMP) {
+             orex(0,r,0,0);
+-	    if ((fc & ~0x100) != TOK_NE)
++	    if (!(fc & 0x100) || !ba_unordered_true(fc))
+               oad(0xb8 + REG_VALUE(r), 0); /* mov $0, r */
+ 	    else
+               oad(0xb8 + REG_VALUE(r), 1); /* mov $1, r */
+@@ -486,8 +498,9 @@ void load(int r, SValue *sv)
+ 	      {
+ 	        /* This was a float compare.  If the parity bit is
+ 		   set the result was unordered, meaning false for everything
+-		   except TOK_NE, and true for TOK_NE.  */
+-		fc &= ~0x100;
++		   except TOK_NE, and true for TOK_NE (the other way round
++		   if the compare was negated).  */
++		fc &= ~0x300;
+ 		o(0x037a + (REX_BASE(r) << 8));
+ 	      }
+             orex(0,r,0, 0x0f); /* setxx %br */
+@@ -1719,8 +1732,9 @@ ST_FUNC int gtst(int inv, int t)
+ 	       Take care about inverting the test.  We need to jump
+ 	       to our target if the result was unordered and test wasn't NE,
+ 	       otherwise if unordered we don't want to jump.  */
+-	    vtop->c.i &= ~0x100;
+-            if (inv == (vtop->c.i == TOK_NE))
++	    int unordered = ba_unordered_true(vtop->c.i);
++	    vtop->c.i &= ~0x300;
++            if (inv == unordered)
+ 	      o(0x067a);  /* jp +6 */
+ 	    else
+ 	      {

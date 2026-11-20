@@ -4761,9 +4761,14 @@ ST_FUNC void unary(void)
         if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST) {
             gen_cast_s(VT_BOOL);
             vtop->c.i = !vtop->c.i;
-        } else if ((vtop->r & VT_VALMASK) == VT_CMP)
+        } else if ((vtop->r & VT_VALMASK) == VT_CMP) {
             vtop->c.i ^= 1;
-        else {
+            /* build-anywhere: an x86_64 SSE compare (0x100) remembers that
+               it was negated (0x200), so that an unordered result (NaN)
+               is negated too: !(x >= 0) is true for x = NaN. */
+            if (vtop->c.i & 0x100)
+                vtop->c.i ^= 0x200;
+        } else {
             save_regs(1);
             vseti(VT_JMP, gvtst(1, 0));
         }

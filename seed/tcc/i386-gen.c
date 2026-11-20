@@ -1046,7 +1046,11 @@ ST_FUNC void gen_cvt_ftoi(int t)
     gfunc_call(1);
     vpushi(0);
     vtop->r = REG_IRET;
-    vtop->r2 = REG_LRET;
+    /* build-anywhere: as in later TinyCC, the high half (edx) belongs to
+       the result only for a long long: an int result must not keep edx
+       busy, or the register allocator spills wrongly (seen as a crash). */
+    if ((t & VT_BTYPE) == VT_LLONG)
+        vtop->r2 = REG_LRET;
 }
 
 /* convert from one floating point type to another */

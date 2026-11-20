@@ -36,7 +36,7 @@
 # tier: "auto" uses root, passwordless sudo or doas, or asks for a password
 # on a terminal; "never" only uses package managers that need no root).
 
-BA_VERSION=0.1.0
+BA_VERSION=0.2.0
 
 # Prebuilt toolchains for the download tier: gcc, binutils and musl,
 # statically linked, so they run on any Linux kernel of their architecture.

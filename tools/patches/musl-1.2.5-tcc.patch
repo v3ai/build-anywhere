@@ -1,0 +1,484 @@
+diff -ruN a/arch/i386/bits/alltypes.h.in b/arch/i386/bits/alltypes.h.in
+--- a/arch/i386/bits/alltypes.h.in
++++ b/arch/i386/bits/alltypes.h.in
+@@ -1,3 +1,15 @@
++/* build-anywhere: <stdarg.h> for TinyCC, which has no __builtin_va_list
++ * on Linux. Same definitions as TinyCC's own <stdarg.h>. */
++#if defined(__TINYC__) && !defined(__TINYC_va_list)
++#define __TINYC_va_list
++typedef char *__builtin_va_list;
++#define __builtin_va_start(ap, last) ((ap) = ((char *)&(last)) + ((sizeof(last) + 3) & ~3))
++#define __builtin_va_arg(ap, type) \
++	((ap) += (sizeof(type) + 3) & ~3, *(type *)((ap) - ((sizeof(type) + 3) & ~3)))
++#define __builtin_va_copy(dest, src) ((dest) = (src))
++#define __builtin_va_end(ap)
++#endif
++
+ #define _REDIR_TIME64 1
+ #define _Addr int
+ #define _Int64 long long
+diff -ruN a/arch/i386/syscall_arch.h b/arch/i386/syscall_arch.h
+--- a/arch/i386/syscall_arch.h
++++ b/arch/i386/syscall_arch.h
+@@ -3,7 +3,7 @@
+ ((union { long long ll; long l[2]; }){ .ll = x }).l[1]
+ #define __SYSCALL_LL_O(x) __SYSCALL_LL_E((x))
+ 
+-#if SYSCALL_NO_TLS
++#if SYSCALL_NO_TLS || defined(__TINYC__)
+ #define SYSCALL_INSNS "int $128"
+ #else
+ #define SYSCALL_INSNS "call *%%gs:16"
+diff -ruN a/arch/x86_64/bits/alltypes.h.in b/arch/x86_64/bits/alltypes.h.in
+--- a/arch/x86_64/bits/alltypes.h.in
++++ b/arch/x86_64/bits/alltypes.h.in
+@@ -1,3 +1,23 @@
++/* build-anywhere: <stdarg.h> for TinyCC, which has no __builtin_va_list
++ * on Linux. Same layout and helpers as TinyCC's own <stdarg.h>. */
++#if defined(__TINYC__) && !defined(__TINYC_va_list)
++#define __TINYC_va_list
++typedef struct {
++	unsigned int __gp_offset;
++	unsigned int __fp_offset;
++	char *__overflow_arg_area;
++	char *__reg_save_area;
++} __tcc_va_list_struct;
++typedef __tcc_va_list_struct __builtin_va_list[1];
++void __va_start(__tcc_va_list_struct *, void *);
++void *__va_arg(__tcc_va_list_struct *, int, int, int);
++#define __builtin_va_start(ap, last) __va_start(ap, __builtin_frame_address(0))
++#define __builtin_va_arg(ap, type) \
++	(*(type *)(__va_arg(ap, __builtin_va_arg_types(type), sizeof(type), __alignof__(type))))
++#define __builtin_va_copy(dest, src) (*(dest) = *(src))
++#define __builtin_va_end(ap)
++#endif
++
+ #define _Addr long
+ #define _Int64 long
+ #define _Reg long
+diff -ruN a/arch/x86_64/syscall_arch.h b/arch/x86_64/syscall_arch.h
+--- a/arch/x86_64/syscall_arch.h
++++ b/arch/x86_64/syscall_arch.h
+@@ -31,6 +31,26 @@
+ 	return ret;
+ }
+ 
++#ifdef __TINYC__
++/* build-anywhere: TinyCC has no register variables, so syscalls with more
++ * than three arguments go through a small assembly helper
++ * (src/internal/x86_64/tcc_syscall.s). */
++__attribute__((__visibility__("hidden"))) long __tcc_syscall6(long, long, long, long, long, long, long);
++static __inline long __syscall4(long n, long a1, long a2, long a3, long a4)
++{
++	return __tcc_syscall6(n, a1, a2, a3, a4, 0, 0);
++}
++
++static __inline long __syscall5(long n, long a1, long a2, long a3, long a4, long a5)
++{
++	return __tcc_syscall6(n, a1, a2, a3, a4, a5, 0);
++}
++
++static __inline long __syscall6(long n, long a1, long a2, long a3, long a4, long a5, long a6)
++{
++	return __tcc_syscall6(n, a1, a2, a3, a4, a5, a6);
++}
++#else
+ static __inline long __syscall4(long n, long a1, long a2, long a3, long a4)
+ {
+ 	unsigned long ret;
+@@ -60,6 +80,7 @@
+ 						  "d"(a3), "r"(r10), "r"(r8), "r"(r9) : "rcx", "r11", "memory");
+ 	return ret;
+ }
++#endif
+ 
+ #define VDSO_USEFUL
+ #define VDSO_CGT_SYM "__vdso_clock_gettime"
+diff -ruN a/src/fenv/i386/fenv.s b/src/fenv/i386/fenv.s
+--- a/src/fenv/i386/fenv.s
++++ b/src/fenv/i386/fenv.s
+@@ -7,9 +7,7 @@
+ 	and $0x3f,%ecx
+ 	fnstsw %ax
+ 		# consider sse fenv as well if the cpu has XMM capability
+-	call 1f
+-1:	addl $__hwcap-1b,(%esp)
+-	pop %edx
++	mov $__hwcap,%edx /* build-anywhere: was call/addl $__hwcap-1b/pop */
+ 	testl $0x02000000,(%edx)
+ 	jz 2f
+ 		# maintain exceptions in the sse mxcsr, clear x87 exceptions
+@@ -17,7 +15,7 @@
+ 	jz 1f
+ 	fnclex
+ 1:	push %edx
+-	stmxcsr (%esp)
++	.byte 0x0f,0xae,0x1c,0x24 /* stmxcsr (%esp) */
+ 	pop %edx
+ 	and $0x3f,%eax
+ 	or %eax,%edx
+@@ -26,7 +24,7 @@
+ 	not %ecx
+ 	and %ecx,%edx
+ 	push %edx
+-	ldmxcsr (%esp)
++	.byte 0x0f,0xae,0x14,0x24 /* ldmxcsr (%esp) */
+ 	pop %edx
+ 1:	xor %eax,%eax
+ 	ret
+@@ -72,16 +70,14 @@
+ 	or %ch,1(%esp)
+ 	fldcw (%esp)
+ 		# consider sse fenv as well if the cpu has XMM capability
+-	call 1f
+-1:	addl $__hwcap-1b,(%esp)
+-	pop %edx
++	mov $__hwcap,%edx /* build-anywhere: was call/addl $__hwcap-1b/pop */
+ 	testl $0x02000000,(%edx)
+ 	jz 1f
+-	stmxcsr (%esp)
++	.byte 0x0f,0xae,0x1c,0x24 /* stmxcsr (%esp) */
+ 	shl $3,%ch
+ 	andb $0x9f,1(%esp)
+ 	or %ch,1(%esp)
+-	ldmxcsr (%esp)
++	.byte 0x0f,0xae,0x14,0x24 /* ldmxcsr (%esp) */
+ 1:	pop %ecx
+ 	ret
+ 
+@@ -101,13 +97,11 @@
+ 	xor %eax,%eax
+ 	fnstenv (%ecx)
+ 		# consider sse fenv as well if the cpu has XMM capability
+-	call 1f
+-1:	addl $__hwcap-1b,(%esp)
+-	pop %edx
++	mov $__hwcap,%edx /* build-anywhere: was call/addl $__hwcap-1b/pop */
+ 	testl $0x02000000,(%edx)
+ 	jz 1f
+ 	push %eax
+-	stmxcsr (%esp)
++	.byte 0x0f,0xae,0x1c,0x24 /* stmxcsr (%esp) */
+ 	pop %edx
+ 	and $0x3f,%edx
+ 	or %edx,4(%ecx)
+@@ -133,9 +127,7 @@
+ 	fldenv (%esp)
+ 	add $28,%esp
+ 		# consider sse fenv as well if the cpu has XMM capability
+-2:	call 1f
+-1:	addl $__hwcap-1b,(%esp)
+-	pop %edx
++2:	mov $__hwcap,%edx /* build-anywhere: was call/addl $__hwcap-1b/pop */
+ 	testl $0x02000000,(%edx)
+ 	jz 1f
+ 		# mxcsr := same rounding mode, cleared exceptions, default mask
+@@ -143,7 +135,7 @@
+ 	shl $3,%ecx
+ 	or $0x1f80,%ecx
+ 	mov %ecx,4(%esp)
+-	ldmxcsr 4(%esp)
++	.byte 0x0f,0xae,0x54,0x24,0x04 /* ldmxcsr 4(%esp) */
+ 1:	ret
+ 
+ .global fetestexcept
+@@ -153,12 +145,10 @@
+ 	and $0x3f,%ecx
+ 	fnstsw %ax
+ 		# consider sse fenv as well if the cpu has XMM capability
+-	call 1f
+-1:	addl $__hwcap-1b,(%esp)
+-	pop %edx
++	mov $__hwcap,%edx /* build-anywhere: was call/addl $__hwcap-1b/pop */
+ 	testl $0x02000000,(%edx)
+ 	jz 1f
+-	stmxcsr 4(%esp)
++	.byte 0x0f,0xae,0x5c,0x24,0x04 /* stmxcsr 4(%esp) */
+ 	or 4(%esp),%eax
+ 1:	and %ecx,%eax
+ 	ret
+diff -ruN a/src/fenv/x86_64/fenv.s b/src/fenv/x86_64/fenv.s
+--- a/src/fenv/x86_64/fenv.s
++++ b/src/fenv/x86_64/fenv.s
+@@ -8,14 +8,14 @@
+ 	test %eax,%ecx
+ 	jz 1f
+ 	fnclex
+-1:	stmxcsr -8(%rsp)
++1:	.byte 0x0f,0xae,0x5c,0x24,0xf8 /* stmxcsr -8(%rsp) */
+ 	and $0x3f,%eax
+ 	or %eax,-8(%rsp)
+ 	test %ecx,-8(%rsp)
+ 	jz 1f
+ 	not %ecx
+ 	and %ecx,-8(%rsp)
+-	ldmxcsr -8(%rsp)
++	.byte 0x0f,0xae,0x54,0x24,0xf8 /* ldmxcsr -8(%rsp) */
+ 1:	xor %eax,%eax
+ 	ret
+ 
+@@ -23,9 +23,9 @@
+ .type feraiseexcept,@function
+ feraiseexcept:
+ 	and $0x3f,%edi
+-	stmxcsr -8(%rsp)
++	.byte 0x0f,0xae,0x5c,0x24,0xf8 /* stmxcsr -8(%rsp) */
+ 	or %edi,-8(%rsp)
+-	ldmxcsr -8(%rsp)
++	.byte 0x0f,0xae,0x54,0x24,0xf8 /* ldmxcsr -8(%rsp) */
+ 	xor %eax,%eax
+ 	ret
+ 
+@@ -40,11 +40,11 @@
+ 	andb $0xf3,1(%rsp)
+ 	or %ch,1(%rsp)
+ 	fldcw (%rsp)
+-	stmxcsr (%rsp)
++	.byte 0x0f,0xae,0x1c,0x24 /* stmxcsr (%rsp) */
+ 	shl $3,%ch
+ 	andb $0x9f,1(%rsp)
+ 	or %ch,1(%rsp)
+-	ldmxcsr (%rsp)
++	.byte 0x0f,0xae,0x14,0x24 /* ldmxcsr (%rsp) */
+ 	pop %rcx
+ 	ret
+ 
+@@ -52,7 +52,7 @@
+ .type fegetround,@function
+ fegetround:
+ 	push %rax
+-	stmxcsr (%rsp)
++	.byte 0x0f,0xae,0x1c,0x24 /* stmxcsr (%rsp) */
+ 	pop %rax
+ 	shr $3,%eax
+ 	and $0xc00,%eax
+@@ -63,7 +63,7 @@
+ fegetenv:
+ 	xor %eax,%eax
+ 	fnstenv (%rdi)
+-	stmxcsr 28(%rdi)
++	.byte 0x0f,0xae,0x5f,0x1c /* stmxcsr 28(%rdi) */
+ 	ret
+ 
+ .global fesetenv
+@@ -73,7 +73,7 @@
+ 	inc %rdi
+ 	jz 1f
+ 	fldenv -1(%rdi)
+-	ldmxcsr 27(%rdi)
++	.byte 0x0f,0xae,0x57,0x1b /* ldmxcsr 27(%rdi) */
+ 	ret
+ 1:	push %rax
+ 	push %rax
+@@ -81,7 +81,7 @@
+ 	pushq $0x37f
+ 	fldenv (%rsp)
+ 	pushq $0x1f80
+-	ldmxcsr (%rsp)
++	.byte 0x0f,0xae,0x14,0x24 /* ldmxcsr (%rsp) */
+ 	add $40,%rsp
+ 	ret
+ 
+@@ -90,7 +90,7 @@
+ fetestexcept:
+ 	and $0x3f,%edi
+ 	push %rax
+-	stmxcsr (%rsp)
++	.byte 0x0f,0xae,0x1c,0x24 /* stmxcsr (%rsp) */
+ 	pop %rsi
+ 	fnstsw %ax
+ 	or %esi,%eax
+diff -ruN a/src/internal/syscall.h b/src/internal/syscall.h
+--- a/src/internal/syscall.h
++++ b/src/internal/syscall.h
+@@ -403,7 +403,7 @@
+ #define sys_wait4(a,b,c,d) __syscall_ret(__sys_wait4(a,b,c,d))
+ #define sys_wait4_cp(a,b,c,d) __syscall_ret(__sys_wait4_cp(a,b,c,d))
+ 
+-hidden void __procfdname(char __buf[static 15+3*sizeof(int)], unsigned);
++hidden void __procfdname(char __buf[15+3*sizeof(int)], unsigned);
+ 
+ hidden void *__vdsosym(const char *, const char *);
+ 
+diff -ruN a/src/internal/x86_64/tcc_syscall.s b/src/internal/x86_64/tcc_syscall.s
+--- a/src/internal/x86_64/tcc_syscall.s
++++ b/src/internal/x86_64/tcc_syscall.s
+@@ -0,0 +1,16 @@
++/* build-anywhere: __tcc_syscall6(n, a1, a2, a3, a4, a5, a6) for code built
++ * by TinyCC (see arch/x86_64/syscall_arch.h). Moves the System V call
++ * arguments into the Linux syscall registers. */
++.global __tcc_syscall6
++.hidden __tcc_syscall6
++.type __tcc_syscall6,@function
++__tcc_syscall6:
++	mov %rdi,%rax
++	mov %rsi,%rdi
++	mov %rdx,%rsi
++	mov %rcx,%rdx
++	mov %r8,%r10
++	mov %r9,%r8
++	mov 8(%rsp),%r9
++	syscall
++	ret
+diff -ruN a/src/math/x86_64/expl.s b/src/math/x86_64/expl.s
+--- a/src/math/x86_64/expl.s
++++ b/src/math/x86_64/expl.s
+@@ -37,7 +37,7 @@
+ 	fstpt (%rsp)
+ 	fstpt 16(%rsp)
+ 	fstpt 32(%rsp)
+-	call exp2l@PLT
++	call exp2l
+ 		# if 2^hi == inf return 2^hi
+ 	fld %st(0)
+ 	fstpt (%rsp)
+diff -ruN a/src/network/lookup.h b/src/network/lookup.h
+--- a/src/network/lookup.h
++++ b/src/network/lookup.h
+@@ -43,9 +43,9 @@
+ #define MAXADDRS 48
+ #define MAXSERVS 2
+ 
+-hidden int __lookup_serv(struct service buf[static MAXSERVS], const char *name, int proto, int socktype, int flags);
+-hidden int __lookup_name(struct address buf[static MAXADDRS], char canon[static 256], const char *name, int family, int flags);
+-hidden int __lookup_ipliteral(struct address buf[static 1], const char *name, int family);
++hidden int __lookup_serv(struct service buf[MAXSERVS], const char *name, int proto, int socktype, int flags);
++hidden int __lookup_name(struct address buf[MAXADDRS], char canon[256], const char *name, int family, int flags);
++hidden int __lookup_ipliteral(struct address buf[1], const char *name, int family);
+ 
+ hidden int __get_resolv_conf(struct resolvconf *, char *, size_t);
+ hidden int __res_msend_rc(int, const unsigned char *const *, const int *, unsigned char *const *, int *, int, const struct resolvconf *);
+diff -ruN a/src/network/lookup_ipliteral.c b/src/network/lookup_ipliteral.c
+--- a/src/network/lookup_ipliteral.c
++++ b/src/network/lookup_ipliteral.c
+@@ -9,7 +9,7 @@
+ #include <ctype.h>
+ #include "lookup.h"
+ 
+-int __lookup_ipliteral(struct address buf[static 1], const char *name, int family)
++int __lookup_ipliteral(struct address buf[1], const char *name, int family)
+ {
+ 	struct in_addr a4;
+ 	struct in6_addr a6;
+diff -ruN a/src/network/lookup_name.c b/src/network/lookup_name.c
+--- a/src/network/lookup_name.c
++++ b/src/network/lookup_name.c
+@@ -23,7 +23,7 @@
+ 	return !*s;
+ }
+ 
+-static int name_from_null(struct address buf[static 2], const char *name, int family, int flags)
++static int name_from_null(struct address buf[2], const char *name, int family, int flags)
+ {
+ 	int cnt = 0;
+ 	if (name) return 0;
+@@ -41,12 +41,12 @@
+ 	return cnt;
+ }
+ 
+-static int name_from_numeric(struct address buf[static 1], const char *name, int family)
++static int name_from_numeric(struct address buf[1], const char *name, int family)
+ {
+ 	return __lookup_ipliteral(buf, name, family);
+ }
+ 
+-static int name_from_hosts(struct address buf[static MAXADDRS], char canon[static 256], const char *name, int family)
++static int name_from_hosts(struct address buf[MAXADDRS], char canon[256], const char *name, int family)
+ {
+ 	char line[512];
+ 	size_t l = strlen(name);
+@@ -140,7 +140,7 @@
+ 	return 0;
+ }
+ 
+-static int name_from_dns(struct address buf[static MAXADDRS], char canon[static 256], const char *name, int family, const struct resolvconf *conf)
++static int name_from_dns(struct address buf[MAXADDRS], char canon[256], const char *name, int family, const struct resolvconf *conf)
+ {
+ 	unsigned char qbuf[2][280], abuf[2][ABUF_SIZE];
+ 	const unsigned char *qp[2] = { qbuf[0], qbuf[1] };
+@@ -187,7 +187,7 @@
+ 	return EAI_NODATA;
+ }
+ 
+-static int name_from_dns_search(struct address buf[static MAXADDRS], char canon[static 256], const char *name, int family)
++static int name_from_dns_search(struct address buf[MAXADDRS], char canon[256], const char *name, int family)
+ {
+ 	char search[256];
+ 	struct resolvconf conf;
+@@ -305,7 +305,7 @@
+ 	return b->sortkey - a->sortkey;
+ }
+ 
+-int __lookup_name(struct address buf[static MAXADDRS], char canon[static 256], const char *name, int family, int flags)
++int __lookup_name(struct address buf[MAXADDRS], char canon[256], const char *name, int family, int flags)
+ {
+ 	int cnt = 0, i, j;
+ 
+diff -ruN a/src/network/lookup_serv.c b/src/network/lookup_serv.c
+--- a/src/network/lookup_serv.c
++++ b/src/network/lookup_serv.c
+@@ -9,7 +9,7 @@
+ #include "lookup.h"
+ #include "stdio_impl.h"
+ 
+-int __lookup_serv(struct service buf[static MAXSERVS], const char *name, int proto, int socktype, int flags)
++int __lookup_serv(struct service buf[MAXSERVS], const char *name, int proto, int socktype, int flags)
+ {
+ 	char line[128];
+ 	int cnt = 0;
+diff -ruN a/src/signal/i386/sigsetjmp.s b/src/signal/i386/sigsetjmp.s
+--- a/src/signal/i386/sigsetjmp.s
++++ b/src/signal/i386/sigsetjmp.s
+@@ -5,7 +5,8 @@
+ sigsetjmp:
+ __sigsetjmp:
+ 	mov 8(%esp),%ecx
+-	jecxz 1f
++	test %ecx,%ecx
++	jz 1f
+ 
+ 	mov 4(%esp),%eax
+ 	popl 24(%eax)
+diff -ruN a/src/signal/x86_64/sigsetjmp.s b/src/signal/x86_64/sigsetjmp.s
+--- a/src/signal/x86_64/sigsetjmp.s
++++ b/src/signal/x86_64/sigsetjmp.s
+@@ -11,7 +11,7 @@
+ 	mov %rbx,72+8(%rdi)
+ 	mov %rdi,%rbx
+ 
+-	call setjmp@PLT
++	call setjmp
+ 
+ 	pushq 64(%rbx)
+ 	mov %rbx,%rdi
+@@ -21,4 +21,4 @@
+ .hidden __sigsetjmp_tail
+ 	jmp __sigsetjmp_tail
+ 
+-1:	jmp setjmp@PLT
++1:	jmp setjmp
+diff -ruN a/src/thread/i386/__set_thread_area.s b/src/thread/i386/__set_thread_area.s
+--- a/src/thread/i386/__set_thread_area.s
++++ b/src/thread/i386/__set_thread_area.s
+@@ -7,9 +7,10 @@
+ 	push $0x51
+ 	push $0xfffff
+ 	push 16(%esp)
+-	call 1f
+-1:	addl $4f-1b,(%esp)
+-	pop %ecx
++	/* build-anywhere: TinyCC's assembler cannot compute the difference of
++	   labels in two sections (4f-1b), so take the address of the GDT entry
++	   number directly; programs built by TinyCC are static, not PIE. */
++	mov $__tcc_tls_entry,%ecx
+ 	mov (%ecx),%edx
+ 	push %edx
+ 	mov %esp,%ebx
+@@ -44,4 +45,6 @@
+ 
+ .data
+ 	.align 4
+-4:	.long -1
++.hidden __tcc_tls_entry
++__tcc_tls_entry:
++	.long -1
