@@ -154,7 +154,7 @@ case " $* " in *" update "*|*" -Sy "*) touch "$S/../synced"; exit 0 ;; esac
 c=
 for a in "$@"; do case $a in gcc|nixpkgs#gcc) c=gcc ;; clang|llvm|nixpkgs#clang) c=clang ;; esac; done
 [ -n "$c" ] || exit 1
-[ "$c" = "${STUB_FAIL:-}" ] && exit 1
+if [ "$c" = "${STUB_FAIL:-}" ]; then echo "No match for argument: $c" >&2; exit 1; fi
 to=${STUB_TO:-$S}
 mkdir -p "$to"
 n=${STUB_NAME:-$c}
@@ -220,7 +220,8 @@ if [ -n "$realcc" ]; then
     rm -f "$T/hello"
     pkg_ba STUB_UID=0 STUB_FAIL=gcc sh "$BA" --cache="$pc" -o "$T/hello" "$hello" 2>"$T/err"
     if [ "$("$T/hello" pkg 2>/dev/null)" = "hello, pkg" ] && grep -q "clang from dnf" "$T/err" &&
-       grep -q "could not install gcc" "$T/err" && ! grep -q "^sudo" "$T/pm.log"; then
+       grep -q "could not install gcc" "$T/err" && grep -q "^    No match for argument: gcc" "$T/err" &&
+       ! grep -q "^sudo" "$T/pm.log"; then
         ok "package: dnf as root, falls back to clang"
     else
         bad "package: dnf as root, clang fallback"; sed 's/^/      /' "$T/err" "$T/pm.log" | tail -n 20

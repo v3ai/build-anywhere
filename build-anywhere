@@ -349,7 +349,17 @@ pkg_compilers() {
 # sudo and doas ask for passwords on the terminal itself.
 pkg_run() {
     vsay "+ $PKG_SUDO $*"
-    $PKG_SUDO "$@" </dev/null >>"$BA_TMP/log" 2>&1
+    echo "+ $PKG_SUDO $*" >"$BA_TMP/pkg.out"
+    $PKG_SUDO "$@" </dev/null >>"$BA_TMP/pkg.out" 2>&1
+    pr_st=$?
+    cat "$BA_TMP/pkg.out" >>"$BA_TMP/log"
+    return $pr_st
+}
+
+# The last lines the package manager printed, indented.
+pkg_output() {
+    [ -f "$BA_TMP/pkg.out" ] || return 0
+    sed -e :a -e '$q;N;7,$D;ba' "$BA_TMP/pkg.out" | sed 's/^/    /' >&2
 }
 
 # softwareupdate: install the newest Command Line Tools without the
@@ -445,7 +455,8 @@ tier_package() {
                 fi
                 say "package: $tp_pm installed $tp_c, but it does not compile and run a test program"
             else
-                say "package: $tp_pm could not install $tp_c"
+                say "package: $tp_pm could not install $tp_c:"
+                pkg_output
             fi
         done
         PKG_SUDO=$PKG_SUDO_SAVE

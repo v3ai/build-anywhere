@@ -15,7 +15,7 @@ grep -q "compiling with gcc from" /tmp/err
 out=$(/tmp/hello pkg)
 test "$out" = "hello, pkg"
 # The second build finds the installed compiler with the system tier.
-sh build-anywhere -O2 -o /tmp/uni examples/universal/main.c examples/universal/p_util.c 2>/tmp/err
+sh build-anywhere -O2 -o /tmp/uni examples/universal/main.c examples/universal/p_util.c 2>/tmp/err || { cat /tmp/err; exit 1; }
 cat /tmp/err
 grep -q "system compiler" /tmp/err
 out=$(/tmp/uni)
