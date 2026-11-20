@@ -1,0 +1,65 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tiers:
+    name: tiers (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install extra shells
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y dash busybox ksh mksh yash
+      - name: Test every quick tier under every shell
+        run: BA_TEST_SHELL_TIER=1 sh tests/run.sh
+
+  download:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download Zig and build with it
+        run: BA_TEST_DOWNLOAD=1 sh tests/run.sh sh
+
+  libc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare the build-anywhere libc with glibc
+        run: sh tests/libc/run.sh
+
+  bootstrap:
+    name: bootstrap (${{ matrix.image }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # x86_64, and i386 user space on the same kernel.
+        image: [alpine:3.20, i386/alpine:3.20]
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    steps:
+      # Plain git checkout: actions/checkout needs node, which i386 lacks.
+      - name: Check out
+        run: |
+          apk add --no-cache git
+          git clone --depth 1 "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" src
+          cd src && git fetch --depth 1 origin "$GITHUB_SHA" && git checkout FETCH_HEAD
+      - name: No C compiler is installed
+        run: "! command -v cc && ! command -v gcc"
+      - name: Bootstrap a compiler from BusyBox sh and build the examples
+        run: cd src && BA_TEST_BOOTSTRAP=1 BA_TEST_SHELL_TIER=1 sh tests/run.sh
+      - name: Shell tier without any compiler
+        run: |
+          cd src
+          sh build-anywhere --tiers=shell -o hello.sh examples/hello/hello.c
+          ./hello.sh alpine

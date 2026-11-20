@@ -1,0 +1,16 @@
+/* limits.h: build-anywhere shell tier (pnut-sh). */
+#ifndef _BA_SH_LIMITS_H
+#define _BA_SH_LIMITS_H
+#define CHAR_BIT 8
+#define SCHAR_MIN (-128)
+#define SCHAR_MAX 127
+#define UCHAR_MAX 255
+#define CHAR_MIN (-128)
+#define CHAR_MAX 127
+#define SHRT_MIN (-32768)
+#define SHRT_MAX 32767
+#define INT_MIN (-2147483647 - 1)
+#define INT_MAX 2147483647
+#define LONG_MIN (-2147483647 - 1)
+#define LONG_MAX 2147483647
+#endif

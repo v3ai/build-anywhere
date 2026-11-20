@@ -1,0 +1,666 @@
+#!/bin/sh
+# build-anywhere: compile C on any POSIX system, with no dependencies.
+# https://github.com/v3ai/build-anywhere
+#
+# Usage:
+#   build-anywhere [OPTIONS] [CC-FLAGS] FILE.c... [-o OUTPUT]
+#   build-anywhere --cc        print a working C compiler command (getting one if needed)
+#   build-anywhere --doctor    report which ways of getting a compiler work here
+#
+# A C compiler is found by trying these tiers in order; the first one that
+# compiles and runs a test program wins:
+#
+#   system     a compiler that is already installed (cc, c99, gcc, clang, tcc, ...)
+#   download   a pinned, SHA-256-verified Zig toolchain, used as `zig cc`
+#   bootstrap  TCC built from source starting from nothing but this shell, using
+#              the pnut C-to-shell compiler (x86 and x86_64 Linux)
+#   shell      the program itself compiled to a POSIX shell script by pnut
+#              (runs anywhere, but only accepts a subset of C)
+#
+# Options:
+#   --tiers=LIST   comma-separated tiers to try, in order
+#                  (default: system,download,bootstrap,shell)
+#   --cache=DIR    where acquired compilers are kept
+#                  (default: ${XDG_CACHE_HOME:-$HOME/.cache}/build-anywhere)
+#   -v, --verbose  show each probe and command
+#   -h, --help     show this help
+#   --version      show the version
+#
+# Every other argument is passed to the compiler unchanged.
+#
+# Environment: CC (tried first), BA_TIERS, BA_CACHE, BA_SHELL (shell used to run
+# pnut; default: the fastest one installed), BA_VERBOSE=1.
+
+BA_VERSION=0.1.0
+
+# Zig release used by the download tier. The checksums come from
+# https://ziglang.org/download/index.json and are checked before anything
+# from the archive is run.
+BA_ZIG_VERSION=0.17.1
+BA_ZIG_TABLE='
+x86_64-linux        3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a
+x86-linux           0855367e096917bb0b628050d994d1871cc8c1f9192542163f9f93b6a30c9c6c
+aarch64-linux       a1546d5646eb184437918d6635ca6b762a0e889eac09cef720ee7a1ed3fe7795
+arm-linux           45b5262ef4d4d1e70d21683b2ef4c1b765b067f34a13e2aa57d5f92bb02382a9
+riscv64-linux       b31a3fd8b42b614cb68f93f18aab11c1721336654a9c8dd389ff7bab3a6827dc
+powerpc64le-linux   f06911010b44fa4fdd8e8775669acf499310ff18e209bb392f2eb2428dccc05e
+loongarch64-linux   cc698ceda768c2bd94eb15dfa53496da94bc432f20ac713b60798b9f319cc228
+s390x-linux         e88c93115bdc18f7f37551945cb55ba041a002d2334fd1d6f7424187bec3dee8
+x86_64-macos        9af07b20319fbd0c92ee46ad23e81d6a782b1aaea2cfb8dcbff35f1d2c7ddbb7
+aarch64-macos       75f1bc7a1e9852f17ec9a0c1895f767c4ec56d46bc8a834920eece1d0359dd8d
+x86_64-freebsd      fd8b9728f05db2a9942fc1f18087c0e0d6dfccb7a51557b06cf026d3e4c78542
+aarch64-freebsd     5ebd395db8996df2bfe1c252b5b6848ec8fad886192cbd88358fbcbf91c91703
+arm-freebsd         a0ec7b932278086cef43a460938f85f7959a44a660aabda30044bbbc0132cb6f
+powerpc64le-freebsd ba175e24970d9711bf4fbab196914f3d6324a60effca2fde34a68afebbafdfc0
+riscv64-freebsd     b237ebfbe0b276641bf1036c7557dcd72dcfc00493ef3491ea71f455b4989175
+x86_64-netbsd       ab96eafda31fab8525f37d5ec66ffab53b40ce542388ac0aaa8924a7df2acb47
+x86-netbsd          ecfcbff50565d2510c39295f1f7bccb3b9fb8e147cece317a575226e58b33eef
+aarch64-netbsd      ddf6ea43b006f4a4766e81e396d53f3f4eb4d5526f137ded797ccf6d597abdef
+arm-netbsd          71aff179be613b47ef690d34784df5885403d5fbe600710686c7eb14faf8b835
+riscv64-netbsd      af5b5ce63e21b9e85a0ed988651ec03c2d039cabbc0f9dd41be1e8594be8c3e6
+x86_64-openbsd      282bd7041d25c4280d66626461c7e946d5553b5b31719de68aa1b27ddb39ed9f
+aarch64-openbsd     cb23acb22dc53674d399e0e935568aad94f15055d5e12f8d776f93fb5836d17c
+arm-openbsd         bd4f7b8d33c5a8af7d176e52e4d22157c89442440fbb423d1a9be314c8ce989a
+riscv64-openbsd     00a6b773ed54cc6ef4ebae8fa3f3e398350249e99bbd45c937ceff3a02178b23
+'
+# Zig asks automated downloaders to use its community mirrors first
+# (https://ziglang.org/download/community-mirrors/). ziglang.org is tried last.
+BA_ZIG_MIRRORS='
+https://pkg.hexops.org/zig
+https://zigmirror.hryx.net/zig
+https://zig.linus.dev/zig
+https://zig.squirl.dev
+https://zig.mirror.mschae23.de/zig
+https://ziglang.freetls.fastly.net
+https://zig.tilok.dev
+https://zig-mirror.tsimnet.eu/zig
+https://zig.karearl.com/zig
+https://pkg.earth/zig
+https://fs.liujiacai.net/zigbuilds
+https://zigmirror.com
+https://zig.chainsafe.dev
+https://zig.savalione.com
+https://zig.bcr.ist
+https://zig.vortan.dev/zig
+https://pkg.alexrp.com/zig
+'
+
+# ---------------------------------------------------------------------------
+# Utilities
+
+set -u
+umask 022
+
+say()  { printf 'build-anywhere: %s\n' "$*" >&2; }
+vsay() { [ "$BA_VERBOSE" = 1 ] && say "$*"; return 0; }
+die()  { say "error: $*"; exit 1; }
+
+# Quote $1 for safe reuse with eval or in a generated script.
+q() {
+    case $1 in
+    *\'*) printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
+    *)    printf "'%s'" "$1" ;;
+    esac
+}
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+ba_abspath() {
+    case $1 in
+    /*) printf '%s\n' "$1" ;;
+    *)  printf '%s/%s\n' "$(pwd)" "$1" ;;
+    esac
+}
+
+# Directory holding this script (and seed/, libc/).
+BA_SELF=$0
+case $BA_SELF in */*) ;; *) BA_SELF=$(command -v -- "$BA_SELF" 2>/dev/null || printf '%s' "$BA_SELF") ;; esac
+BA_HOME=$(cd "$(dirname -- "$BA_SELF")" && pwd) || die "cannot locate the build-anywhere directory"
+BA_SEED=$BA_HOME/seed
+
+ba_os() {
+    case $(uname -s 2>/dev/null) in
+    Linux)     echo linux ;;
+    Darwin)    echo macos ;;
+    FreeBSD)   echo freebsd ;;
+    NetBSD)    echo netbsd ;;
+    OpenBSD)   echo openbsd ;;
+    DragonFly) echo dragonfly ;;
+    SunOS)     echo solaris ;;
+    AIX)       echo aix ;;
+    Haiku)     echo haiku ;;
+    *)         uname -s 2>/dev/null | tr 'A-Z' 'a-z' ;;
+    esac
+}
+
+ba_arch() {
+    ba_m=$(uname -m 2>/dev/null)
+    # macOS reports the hardware arch of the running process; ask for the
+    # real hardware so that an x86_64 shell under Rosetta still gets arm64.
+    if [ "$(uname -s 2>/dev/null)" = Darwin ] &&
+       [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then
+        ba_m=arm64
+    fi
+    # A 32-bit user space on a 64-bit Linux kernel (a 32-bit container, for
+    # example) needs 32-bit tools: byte 5 of an ELF file is 1 for 32-bit.
+    if [ "$(uname -s 2>/dev/null)" = Linux ]; then
+        case $ba_m in
+        x86_64|aarch64)
+            if [ "$(od -An -tu1 -j4 -N1 /bin/sh 2>/dev/null | tr -d ' ')" = 1 ]; then
+                case $ba_m in x86_64) ba_m=i686 ;; aarch64) ba_m=armv7l ;; esac
+            fi ;;
+        esac
+    fi
+    case $ba_m in
+    x86_64|amd64)             echo x86_64 ;;
+    i[3456]86|i86pc|x86)      echo x86 ;;
+    aarch64|arm64|evbarm64)   echo aarch64 ;;
+    arm*|evbarm)              echo arm ;;
+    riscv64)                  echo riscv64 ;;
+    ppc64le|powerpc64le)      echo powerpc64le ;;
+    s390x)                    echo s390x ;;
+    loongarch64)              echo loongarch64 ;;
+    *)                        echo "$ba_m" ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# Probing a compiler: it must compile a small C89 program that uses the
+# standard library, and the result must run.
+
+ba_write_probe() {
+    cat >"$BA_TMP/probe.c" <<'EOF'
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+char buf[16]; /* global: pnut's shell backend has no local arrays */
+
+int main(void)
+{
+    strcpy(buf, "probe");
+    strcat(buf, "-ok");
+    printf("%s %d\n", buf, (int)strlen(buf));
+    return EXIT_SUCCESS;
+}
+EOF
+}
+
+# probe_cc QUOTED-COMMAND -> success if it builds a working program.
+probe_cc() {
+    rm -f "$BA_TMP/probe" "$BA_TMP/probe.out"
+    vsay "probing: $1"
+    if ! eval "$1 -o \"\$BA_TMP/probe\" \"\$BA_TMP/probe.c\"" >>"$BA_TMP/log" 2>&1; then
+        vsay "  does not compile"
+        return 1
+    fi
+    if ! "$BA_TMP/probe" >"$BA_TMP/probe.out" 2>>"$BA_TMP/log"; then
+        vsay "  output does not run"
+        return 1
+    fi
+    if [ "$(cat "$BA_TMP/probe.out")" != "probe-ok 8" ]; then
+        vsay "  output prints the wrong thing"
+        return 1
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Tier 1: a compiler that is already installed.
+
+tier_system() {
+    ts_cands=
+    [ -n "${CC:-}" ] && ts_cands=$CC
+    ts_cands="$ts_cands
+cc
+c99
+gcc
+clang
+tcc
+c89
+pcc
+cproc
+icx
+suncc"
+    # Versioned compilers (gcc-14, clang-19, ...) anywhere in PATH.
+    ts_ifs=$IFS; IFS=:
+    for ts_dir in $PATH; do
+        IFS=$ts_ifs
+        for ts_f in "$ts_dir"/gcc-[0-9]* "$ts_dir"/clang-[0-9]*; do
+            case ${ts_f##*/} in *-*-*) continue ;; esac   # skip gcc-ar-14 etc.
+            [ -x "$ts_f" ] && ts_cands="$ts_cands
+${ts_f##*/}"
+        done
+    done
+    IFS=$ts_ifs
+
+    ts_nl='
+'
+    IFS=$ts_nl
+    for ts_c in $ts_cands; do
+        IFS=$ts_ifs
+        [ -n "$ts_c" ] || continue
+        # $CC may hold flags ("gcc -m32"); only its first word must exist.
+        set -- $ts_c
+        have "$1" || continue
+        ts_path=$(command -v "$1")
+        # On macOS the /usr/bin compilers are stubs that open an installer
+        # dialog when the Command Line Tools are missing.
+        if [ "$BA_OS" = macos ] && [ "${ts_path%/*}" = /usr/bin ] &&
+           ! xcode-select -p >/dev/null 2>&1; then
+            vsay "skipping $ts_path: Xcode Command Line Tools are not installed"
+            continue
+        fi
+        if probe_cc "$ts_c"; then
+            BA_CC=$ts_c
+            BA_CC_DESC="system compiler '$ts_c'"
+            return 0
+        fi
+    done
+    IFS=$ts_ifs
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Tier 2: download a compiler.
+
+# ba_fetch URL FILE
+ba_fetch() {
+    rm -f "$2"
+    if have curl; then
+        curl -fsSL --retry 2 --connect-timeout 20 -o "$2" "$1" 2>>"$BA_TMP/log" && return 0
+    fi
+    if have wget; then
+        wget -q -T 20 -O "$2" "$1" 2>>"$BA_TMP/log" && return 0
+    fi
+    if have fetch; then    # FreeBSD
+        fetch -q -T 20 -o "$2" "$1" 2>>"$BA_TMP/log" && return 0
+    fi
+    if [ "$BA_OS" = openbsd ] && have ftp; then
+        ftp -V -o "$2" "$1" >>"$BA_TMP/log" 2>&1 && return 0
+    fi
+    if have busybox; then
+        busybox wget -q -O "$2" "$1" 2>>"$BA_TMP/log" && return 0
+    fi
+    rm -f "$2"
+    return 1
+}
+
+have_fetcher() {
+    have curl || have wget || have fetch || have busybox ||
+        { [ "$BA_OS" = openbsd ] && have ftp; }
+}
+
+# ba_sha256 FILE -> prints the lowercase hex digest, or fails.
+ba_sha256() {
+    sh_out=
+    if have sha256sum; then sh_out=$(sha256sum "$1" 2>/dev/null)
+    elif have shasum; then sh_out=$(shasum -a 256 "$1" 2>/dev/null)
+    elif have sha256; then sh_out=$(sha256 -q "$1" 2>/dev/null)
+    elif have openssl; then sh_out=$(openssl dgst -sha256 -r "$1" 2>/dev/null)
+    elif have busybox; then sh_out=$(busybox sha256sum "$1" 2>/dev/null)
+    elif have cksum && cksum -a sha256 /dev/null >/dev/null 2>&1; then
+        sh_out=$(cksum -a sha256 -q "$1" 2>/dev/null) ||
+            sh_out=$(cksum -a sha256 "$1" 2>/dev/null)
+    fi
+    sh_out=$(printf '%s\n' "$sh_out" | tr 'A-F' 'a-f' |
+             sed -n 's/.*\([0-9a-f]\{64\}\).*/\1/p' | sed -n 1p)
+    [ -n "$sh_out" ] || return 1
+    printf '%s\n' "$sh_out"
+}
+
+have_sha256() {
+    have sha256sum || have shasum || have sha256 || have openssl || have busybox ||
+        { have cksum && cksum -a sha256 /dev/null >/dev/null 2>&1; }
+}
+
+# untar_xz ARCHIVE DIR
+untar_xz() {
+    if have xz; then
+        xz -dc "$1" | (cd "$2" && tar -xf -) && return 0
+    fi
+    if have unxz; then
+        unxz -c "$1" | (cd "$2" && tar -xf -) && return 0
+    fi
+    if have xzcat; then
+        xzcat "$1" | (cd "$2" && tar -xf -) && return 0
+    fi
+    (cd "$2" && tar -xJf "$1") 2>>"$BA_TMP/log" && return 0
+    if have busybox; then
+        busybox xz -dc "$1" | (cd "$2" && busybox tar -xf -) && return 0
+    fi
+    return 1
+}
+
+have_unxz() {
+    have xz || have unxz || have xzcat || have busybox ||
+        { have tar && tar --version 2>&1 | grep -q -i -e bsdtar -e libarchive; } ||
+        { [ "$BA_OS" != linux ] && have tar; }   # BSD tars read xz natively
+}
+
+zig_platform() { echo "$BA_ARCH-$BA_OS"; }
+
+zig_sha() {
+    printf '%s\n' "$BA_ZIG_TABLE" | awk -v p="$1" '$1 == p { print $2 }'
+}
+
+# Print the mirror list in random order (awk's srand() seeds from the clock).
+zig_mirrors() {
+    printf '%s\n' "$BA_ZIG_MIRRORS" | awk -v seed="$$" '
+        NF { m[n++] = $1 }
+        END {
+            srand(); r = int(rand() * 32768) + seed
+            srand(r)
+            for (i = n - 1; i > 0; i--) { j = int(rand() * (i + 1)); t = m[i]; m[i] = m[j]; m[j] = t }
+            for (i = 0; i < n; i++) print m[i]
+        }'
+}
+
+# Write the `cc` wrapper for an installed zig.
+zig_write_wrapper() {
+    mkdir -p "$BA_CACHE/bin" || return 1
+    zw=$BA_CACHE/bin/cc-zig
+    {
+        echo '#!/bin/sh'
+        echo '# Generated by build-anywhere: runs the downloaded Zig as a C compiler.'
+        echo "ZIG_GLOBAL_CACHE_DIR=\${ZIG_GLOBAL_CACHE_DIR:-$(q "$BA_CACHE/zig-cache")}"
+        echo 'ZIG_LOCAL_CACHE_DIR=${ZIG_LOCAL_CACHE_DIR:-$ZIG_GLOBAL_CACHE_DIR}'
+        echo 'export ZIG_GLOBAL_CACHE_DIR ZIG_LOCAL_CACHE_DIR'
+        # zig cc turns on UBSan traps when no -O flag is given. A plain C
+        # compiler does not, so neither does this wrapper; flags given by the
+        # caller come later and can turn it back on.
+        echo "exec $(q "$1/zig") cc -fno-sanitize=undefined \"\$@\""
+    } >"$zw.tmp" && chmod 755 "$zw.tmp" && mv -f "$zw.tmp" "$zw"
+}
+
+tier_download() {
+    td_plat=$(zig_platform)
+    td_sha=$(zig_sha "$td_plat")
+    if [ -z "$td_sha" ]; then
+        vsay "download: no Zig $BA_ZIG_VERSION build for $td_plat"
+        return 1
+    fi
+    td_name=zig-$td_plat-$BA_ZIG_VERSION
+    td_dir=$BA_CACHE/$td_name
+
+    if [ ! -x "$td_dir/zig" ]; then
+        have_fetcher || { vsay "download: no curl, wget, fetch or ftp"; return 1; }
+        have_sha256 || {
+            say "download: no SHA-256 tool, so a download could not be verified; skipping"
+            return 1
+        }
+        have_unxz || { vsay "download: no way to unpack .tar.xz"; return 1; }
+
+        td_file=$td_name.tar.xz
+        td_arch=$BA_TMP/$td_file
+        td_ok=0
+        say "downloading Zig $BA_ZIG_VERSION for $td_plat (about 55 MB)..."
+        # BA_TEST_MIRRORS replaces the sources; the test suite uses it to
+        # check that a corrupted download is rejected.
+        td_srcs=${BA_TEST_MIRRORS:-"$(zig_mirrors) https://ziglang.org/download/$BA_ZIG_VERSION"}
+        for td_m in $td_srcs; do
+            case $td_m in
+            https://ziglang.org/*|file://*) td_url=$td_m/$td_file ;;
+            *) td_url=$td_m/$td_file?source=build-anywhere ;;
+            esac
+            vsay "fetching $td_url"
+            ba_fetch "$td_url" "$td_arch" || continue
+            td_got=$(ba_sha256 "$td_arch") || { say "download: could not hash $td_file"; return 1; }
+            if [ "$td_got" = "$td_sha" ]; then
+                td_ok=1
+                break
+            fi
+            say "download: checksum mismatch from ${td_m%%/zig*}, trying another source"
+        done
+        [ "$td_ok" = 1 ] || { say "download: could not get a verified copy of $td_file"; return 1; }
+
+        mkdir -p "$BA_CACHE" || return 1
+        td_x=$BA_CACHE/.unpack.$$
+        rm -rf "$td_x"; mkdir -p "$td_x" || return 1
+        if ! untar_xz "$td_arch" "$td_x" || [ ! -x "$td_x/$td_name/zig" ]; then
+            rm -rf "$td_x"
+            say "download: could not unpack $td_file"
+            return 1
+        fi
+        rm -rf "$td_dir"
+        mv "$td_x/$td_name" "$td_dir" && rm -rf "$td_x" || return 1
+        rm -f "$td_arch"
+    fi
+
+    zig_write_wrapper "$td_dir" || return 1
+    if probe_cc "$(q "$BA_CACHE/bin/cc-zig")"; then
+        BA_CC=$(q "$BA_CACHE/bin/cc-zig")
+        BA_CC_DESC="Zig $BA_ZIG_VERSION (downloaded)"
+        return 0
+    fi
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Shells for running pnut: pick the fastest POSIX shell that is installed.
+
+pick_shell() {
+    if [ -n "${BA_SHELL:-}" ]; then printf '%s\n' "$BA_SHELL"; return; fi
+    for ps in dash ksh93 ksh mksh yash bash; do
+        if have "$ps"; then command -v "$ps"; return; fi
+    done
+    echo /bin/sh
+}
+
+# ---------------------------------------------------------------------------
+# Tier 3: bootstrap TCC from the shell.
+
+bootstrap_supported() {
+    [ "$BA_OS" = linux ] || return 1
+    case $BA_ARCH in x86_64|x86) return 0 ;; esac
+    return 1
+}
+
+# Only one bootstrap at a time per cache: others wait for it to finish.
+bootstrap_lock() {
+    bl_dir=$BA_CACHE/.bootstrap-lock
+    bl_waited=0
+    while ! mkdir "$bl_dir" 2>/dev/null; do
+        bl_pid=$(cat "$bl_dir/pid" 2>/dev/null || :)
+        if [ -n "$bl_pid" ] && ! kill -0 "$bl_pid" 2>/dev/null; then
+            rm -rf "$bl_dir"        # left behind by a process that died
+            continue
+        fi
+        [ "$bl_waited" = 0 ] && say "waiting for another build-anywhere to finish bootstrapping..."
+        bl_waited=$((bl_waited + 1))
+        [ "$bl_waited" -lt 1800 ] || { say "gave up waiting for $bl_dir"; return 1; }
+        sleep 1
+    done
+    echo $$ >"$bl_dir/pid"
+    BA_LOCKED=$bl_dir
+}
+
+bootstrap_unlock() {
+    if [ -n "${BA_LOCKED:-}" ]; then rm -rf "$BA_LOCKED"; fi
+    BA_LOCKED=
+}
+
+tier_bootstrap() {
+    [ -f "$BA_SEED/bootstrap-tcc.sh" ] || { vsay "bootstrap: seed/ is missing"; return 1; }
+    bootstrap_supported || {
+        vsay "bootstrap: needs x86 or x86_64 Linux (this is $BA_ARCH $BA_OS)"
+        return 1
+    }
+    tb_dir=$BA_CACHE/tcc-$BA_ARCH-linux-$BA_VERSION
+    if [ ! -x "$tb_dir/bin/cc" ]; then
+        mkdir -p "$BA_CACHE" || return 1
+        bootstrap_lock || return 1
+        if [ ! -x "$tb_dir/bin/cc" ]; then
+            tb_sh=$(pick_shell)
+            if [ -d "$BA_CACHE/work-tcc-$BA_ARCH" ]; then
+                say "resuming an interrupted bootstrap of a C compiler from the shell ($tb_sh)"
+            else
+                say "bootstrapping a C compiler from the shell ($tb_sh); this happens once and takes about 5 minutes"
+            fi
+            # The work directory survives interruptions: a later run resumes.
+            if ! "$tb_sh" "$BA_SEED/bootstrap-tcc.sh" \
+                --arch "$BA_ARCH" --shell "$tb_sh" --seed "$BA_SEED" \
+                --libc "$BA_HOME/libc" --out "$tb_dir" --work "$BA_CACHE/work-tcc-$BA_ARCH"
+            then
+                bootstrap_unlock
+                say "bootstrap failed (see the output above)"
+                return 1
+            fi
+            rm -rf "$BA_CACHE/work-tcc-$BA_ARCH"
+        fi
+        bootstrap_unlock
+    fi
+    if probe_cc "$(q "$tb_dir/bin/cc")"; then
+        BA_CC=$(q "$tb_dir/bin/cc")
+        BA_CC_DESC="TCC bootstrapped from the shell"
+        return 0
+    fi
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Tier 4: compile the program to a shell script with pnut.
+
+tier_shell() {
+    [ -f "$BA_SEED/pnut-sh.sh" ] || { vsay "shell: seed/ is missing"; return 1; }
+    mkdir -p "$BA_CACHE/bin" || return 1
+    tsh_w=$BA_CACHE/bin/cc-pnut
+    {
+        echo '#!/bin/sh'
+        echo '# Generated by build-anywhere: a cc-like front end for pnut-sh.sh.'
+        echo "BA_SHELL=\${BA_SHELL:-$(q "$(pick_shell)")}"
+        echo 'export BA_SHELL'
+        echo "exec \"\$BA_SHELL\" $(q "$BA_SEED/cc-pnut.sh") \"\$@\""
+    } >"$tsh_w.tmp" && chmod 755 "$tsh_w.tmp" && mv -f "$tsh_w.tmp" "$tsh_w" || return 1
+    if probe_cc "$(q "$tsh_w")"; then
+        BA_CC=$(q "$tsh_w")
+        BA_CC_DESC="pnut (program compiled to a POSIX shell script)"
+        return 0
+    fi
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+
+acquire_cc() {
+    ba_write_probe
+    ac_ifs=$IFS; IFS=,
+    for ac_t in $BA_TIERS; do
+        IFS=$ac_ifs
+        case $ac_t in
+        system|download|bootstrap|shell) ;;
+        *) die "unknown tier '$ac_t' (expected system, download, bootstrap or shell)" ;;
+        esac
+        vsay "trying tier: $ac_t"
+        if tier_$ac_t; then
+            vsay "using $BA_CC_DESC"
+            return 0
+        fi
+    done
+    IFS=$ac_ifs
+    return 1
+}
+
+doctor() {
+    ba_write_probe
+    printf 'build-anywhere %s on %s %s\n' "$BA_VERSION" "$BA_ARCH" "$BA_OS"
+    printf 'cache: %s\n\n' "$BA_CACHE"
+
+    printf 'system:    '
+    if tier_system; then printf 'ok (%s)\n' "$BA_CC"; else printf 'no working compiler installed\n'; fi
+
+    printf 'download:  '
+    dp=$(zig_platform)
+    if [ -x "$BA_CACHE/zig-$dp-$BA_ZIG_VERSION/zig" ]; then printf 'ok (Zig %s already downloaded)\n' "$BA_ZIG_VERSION"
+    elif [ -z "$(zig_sha "$dp")" ]; then printf 'unavailable (no Zig build for %s)\n' "$dp"
+    else
+        dm=
+        have_fetcher || dm="$dm no downloader (curl/wget/fetch/ftp);"
+        have_sha256 || dm="$dm no SHA-256 tool;"
+        have_unxz || dm="$dm no xz unpacker;"
+        if [ -z "$dm" ]; then printf 'possible (Zig %s for %s, needs network)\n' "$BA_ZIG_VERSION" "$dp"
+        else printf 'unavailable:%s\n' "${dm%;}"; fi
+    fi
+
+    printf 'bootstrap: '
+    if [ ! -f "$BA_SEED/bootstrap-tcc.sh" ]; then printf 'unavailable (seed/ is missing)\n'
+    elif ! bootstrap_supported; then printf 'unavailable (needs x86 or x86_64 Linux)\n'
+    elif [ -x "$BA_CACHE/tcc-$BA_ARCH-linux-$BA_VERSION/bin/cc" ]; then printf 'ok (already bootstrapped)\n'
+    else printf 'possible (one-time build, several minutes, using %s)\n' "$(pick_shell)"; fi
+
+    printf 'shell:     '
+    if [ -f "$BA_SEED/pnut-sh.sh" ]; then printf 'possible (C subset only, using %s)\n' "$(pick_shell)"
+    else printf 'unavailable (seed/ is missing)\n'; fi
+}
+
+usage() {
+    sed -n '2,/^$/s/^# \{0,1\}//p' "$BA_SELF"
+}
+
+# ---------------------------------------------------------------------------
+# Main
+
+BA_VERBOSE=${BA_VERBOSE:-0}
+BA_TIERS=${BA_TIERS:-system,download,bootstrap,shell}
+BA_CACHE=${BA_CACHE:-${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/build-anywhere}
+BA_MODE=build
+BA_ARGS=
+BA_NSRC=0
+
+while [ $# -gt 0 ]; do
+    case $1 in
+    --tiers=*)   BA_TIERS=${1#--tiers=} ;;
+    --tiers)     [ $# -ge 2 ] || die "--tiers needs a value"; BA_TIERS=$2; shift ;;
+    --cache=*)   BA_CACHE=${1#--cache=} ;;
+    --cache)     [ $# -ge 2 ] || die "--cache needs a value"; BA_CACHE=$2; shift ;;
+    --cc)        BA_MODE=cc ;;
+    --doctor)    BA_MODE=doctor ;;
+    -v|--verbose) BA_VERBOSE=1 ;;
+    -h|--help)   usage; exit 0 ;;
+    --version)   echo "build-anywhere $BA_VERSION"; exit 0 ;;
+    *)
+        case $1 in *.c|*.C) BA_NSRC=$((BA_NSRC + 1)) ;; esac
+        BA_ARGS="$BA_ARGS $(q "$1")"
+        ;;
+    esac
+    shift
+done
+
+BA_CACHE=$(ba_abspath "$BA_CACHE")
+BA_OS=$(ba_os)
+BA_ARCH=$(ba_arch)
+
+BA_TMP=${TMPDIR:-/tmp}/build-anywhere.$$
+rm -rf "$BA_TMP"
+(umask 077 && mkdir "$BA_TMP") || die "cannot create $BA_TMP"
+BA_LOCKED=
+trap 'rm -rf "$BA_TMP"; bootstrap_unlock' EXIT
+trap 'rm -rf "$BA_TMP"; bootstrap_unlock; exit 130' INT TERM
+: >"$BA_TMP/log"
+
+case $BA_MODE in
+doctor)
+    doctor
+    exit 0
+    ;;
+cc)
+    acquire_cc || { cat "$BA_TMP/log" >&2; die "no way to get a C compiler worked (tiers: $BA_TIERS)"; }
+    eval "set -- $BA_CC"
+    printf '%s\n' "$*"
+    exit 0
+    ;;
+esac
+
+[ -n "$BA_ARGS" ] || { usage >&2; exit 2; }
+[ "$BA_NSRC" -gt 0 ] || die "no .c files given"
+
+if ! acquire_cc; then
+    say "no way to get a C compiler worked (tiers: $BA_TIERS)"
+    say "details:"
+    cat "$BA_TMP/log" >&2
+    say "run '$0 --doctor' to see what is available on this machine"
+    exit 1
+fi
+say "compiling with $BA_CC_DESC"
+vsay "+ $BA_CC$BA_ARGS"
+eval "$BA_CC$BA_ARGS"
