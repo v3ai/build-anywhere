@@ -32,6 +32,7 @@ jobs:
           - debian:stable-slim                         # apt-get, no package lists yet
           - ubuntu:24.04                               # apt-get
           - i386/debian:bookworm-slim                  # apt-get, 32-bit (trixie has no full i386)
+          - i386/alpine:latest                         # apk, 32-bit
           - fedora:latest                              # dnf
           - almalinux:9-minimal                        # microdnf
           - amazonlinux:2023                           # dnf
@@ -52,7 +53,7 @@ jobs:
       # docker run rather than a job container: the image starts untouched
       # (a job container would need node, tar and libstdc++ for checkout).
       - name: Install a compiler with the package manager and build
-        run: docker run --rm --network host -v "$PWD:/src:ro" -w /src "${{ matrix.image }}" sh .github/ci/package.sh
+        run: docker run --rm --network host --security-opt seccomp=unconfined -v "$PWD:/src:ro" -w /src "${{ matrix.image }}" sh .github/ci/package.sh
 
   # Not root, but with passwordless sudo.
   package-sudo:
