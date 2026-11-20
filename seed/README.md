@@ -6,14 +6,14 @@ every file is shell script or C source.
 | File | What it is |
 |---|---|
 | `pnut-sh.sh` | pnut, a C compiler, compiled to a POSIX shell script. Generated from `pnut/` by `tools/vendor-seed.sh`. |
-| `pnut/` | pnut's C sources (BSD 2-Clause). |
+| `pnut/` | pnut's C sources (BSD 2-Clause), with build-anywhere's floating point and I/O hooks for the shell backend (`tools/patches/pnut-shell-tier.patch`). |
 | `tcc/` | TinyCC 0.9.27, trimmed to x86/x86_64 Linux and patched (LGPL 2.1+). |
 | `musl/` | musl 1.2.5, the C library of programs built by the bootstrap tier: trimmed to i386/x86_64 and patched for TinyCC (MIT). |
 | `linux-headers/` | 134 Linux kernel headers (`<linux/*.h>`, `<asm/*.h>`) for those programs, from sabotage-linux's sanitized copy (GPL-2.0 WITH Linux-syscall-note). |
 | `bootstrap-tcc.sh` | Builds TinyCC from `pnut-sh.sh` and a shell, then musl with that TinyCC (bootstrap tier). |
 | `build-musl.sh` | Builds musl with TinyCC, without make (called by `bootstrap-tcc.sh`). |
 | `cc-pnut.sh` | A cc-like front end for `pnut-sh.sh` (shell tier). |
-| `pnut-libc/` | The C library for programs compiled by the shell tier (MIT). |
+| `pnut-libc/` | The C library for programs compiled by the shell tier (MIT): `libc.c`, plus `float.c` (floating point and `<math.h>`), `term.c` (`<termios.h>`) and `net.c` (sockets) for the programs that use them. |
 
 ## Provenance
 

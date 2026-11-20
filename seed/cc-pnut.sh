@@ -6,9 +6,12 @@
 #
 # Flags that only matter to native compilers (-O, -g, -W, -std=, -l, ...)
 # are accepted and ignored. Several .c files are compiled as one unit.
-# Only a subset of C works: no floating point, no unsigned arithmetic, no
-# variadic functions besides printf; see seed/pnut-libc/libc.c for the
-# library. Set BA_SHELL to choose the shell that runs pnut-sh.sh.
+# Only a subset of C works: no unsigned arithmetic, no variadic functions
+# besides printf, no local arrays or struct values; see seed/pnut-libc/ for
+# the library. float and double work (computed in software, see
+# seed/pnut-libc/float.c) and then need a shell with 64-bit arithmetic;
+# <termios.h> and sockets work through stty and nc (term.c, net.c).
+# Set BA_SHELL to choose the shell that runs pnut-sh.sh.
 set -eu
 
 SEED=$(cd "$(dirname "$0")" && pwd)
@@ -52,7 +55,7 @@ trap 'rm -rf "$tmp"; exit 130' INT TERM
 # and the directories of the sources (which win over -I, as in C).
 inc=$tmp/inc
 mkdir "$inc"
-cp "$SEED"/pnut-libc/include/*.h "$inc/"
+cp -R "$SEED"/pnut-libc/include/. "$inc/"
 copy_tree() { # DIR: copy its C sources and headers into $inc
     (cd "$1" && find . -name .git -prune -o -type f \
         \( -name '*.h' -o -name '*.c' -o -name '*.inc' -o -name '*.def' \) -print) |
@@ -71,6 +74,33 @@ for d in $dirs; do
     copy_tree "$d"
 done
 set -- -I "$inc/" "$SEED/pnut-libc/libc.c"
+# uses REGEX: whether a C file of the program matches REGEX (grep -E)
+uses() {
+    for d in $dirs; do
+        if (cd "$d" && find . -name .git -prune -o -type f \( -name '*.h' -o -name '*.c' -o -name '*.inc' \) -print) |
+            while IFS= read -r f; do
+                if grep -E "$1" "$d/$f" >/dev/null 2>&1; then
+                    echo yes
+                    break
+                fi
+            done | grep yes >/dev/null; then
+            return 0
+        fi
+    done
+    return 1
+}
+# The floating-point library only when the program uses floating point (it
+# makes every script larger and needs 64-bit shell arithmetic), and terminal
+# control and sockets only when the program includes their headers.
+if uses '(^|[^A-Za-z0-9_])(float|double|atof|strtod)([^A-Za-z0-9_]|$)|<(math|float)\.h>'; then
+    set -- "$@" "$SEED/pnut-libc/float.c"
+fi
+if uses '<(termios|sys/ioctl)\.h>'; then
+    set -- "$@" "$SEED/pnut-libc/term.c"
+fi
+if uses '<(sys/socket|netinet/in|arpa/inet|netdb)\.h>'; then
+    set -- "$@" "$SEED/pnut-libc/net.c"
+fi
 for d in $defs; do set -- "$@" "$d"; done
 for f in $srcs; do set -- "$@" "$inc/$(basename "$f")"; done
 IFS=$oldifs

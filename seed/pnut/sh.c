@@ -43,6 +43,10 @@ int cumul_text_alloc = 0;
 // Rope-like text representation
 #include "text.c"
 
+#ifdef SH_SUPPORT_FLOAT
+#include "sh-float.c"
+#endif
+
 // Place prototype of mutually recursive functions here
 
 enum STMT_CTX {
@@ -694,6 +698,9 @@ ast handle_side_effects_go(ast node, bool executes_conditionally) {
   if (nb_children == 0) {
     if ( op == IDENTIFIER || op == IDENTIFIER_INTERNAL || op == IDENTIFIER_STRING || op == IDENTIFIER_DOLLAR
       || op == CHARACTER  || op == INTEGER
+#ifdef SH_SUPPORT_FLOAT
+      || op == DOUBLE_LIT
+#endif
 #ifdef PARSE_NUMERIC_LITERAL_WITH_BASE
       || op == INTEGER_HEX || op == INTEGER_OCT
 #endif
@@ -872,6 +879,11 @@ text comp_initializer_list(ast initializer_list, int expected_len) {
       args = concatenate_strings_with(args, string_concat3(wrap_str_lit("$(("), wrap_integer(1, element), wrap_str_lit("))")), wrap_char(' '));
     }
 #endif
+#ifdef SH_SUPPORT_FLOAT
+    else if (op == DOUBLE_LIT) {
+      args = concatenate_strings_with(args, fl_lit_text(element), wrap_char(' '));
+    }
+#endif
     else if (op == CHARACTER) {
       // TODO: Character identifiers are only defined at the end of the script, so we can't use them here
       args = concatenate_strings_with(args, wrap_int(get_val_(CHARACTER, element)), wrap_char(' '));
@@ -991,7 +1003,13 @@ text comp_rvalue_go(ast node, int context, ast test_side_effects, int outer_op) 
         return wrap_in_condition_if_needed(context, test_side_effects, string_concat(wrap_char('$'), character_ident(get_val_(CHARACTER, node))));
       }
 #endif
-    } else if (op == IDENTIFIER || op == IDENTIFIER_INTERNAL || op == IDENTIFIER_STRING || op == IDENTIFIER_DOLLAR) {
+    }
+#ifdef SH_SUPPORT_FLOAT
+    else if (op == DOUBLE_LIT) {
+      return wrap_in_condition_if_needed(context, test_side_effects, fl_lit_text(node));
+    }
+#endif
+    else if (op == IDENTIFIER || op == IDENTIFIER_INTERNAL || op == IDENTIFIER_STRING || op == IDENTIFIER_DOLLAR) {
       if (context == RVALUE_CTX_ARITH_EXPANSION) { return env_var_with_prefix(node, false); }
       else { return wrap_in_condition_if_needed(context, test_side_effects, string_concat(wrap_char('$'), env_var_with_prefix(node, true))); }
     } else {
@@ -1050,6 +1068,9 @@ text comp_rvalue_go(ast node, int context, ast test_side_effects, int outer_op) 
         child0 = get_child_(DECL, child0, 1); // Get the type
         op = get_op(child0);
         if (op == INT_KW || op == SHORT_KW || op == LONG_KW || op == CHAR_KW || op == VOID_KW
+#ifdef SH_SUPPORT_FLOAT
+          || op == DOUBLE_KW || op == FLOAT_KW
+#endif
           || op == ENUM_KW || op == '*') {
           return wrap_in_condition_if_needed(context, test_side_effects, wrap_int(1));
         }
@@ -2305,6 +2326,10 @@ void comp_glo_decl(ast node) {
   ast declarations;
   int op = get_op(node);
   fun_gensym_ix = 0;
+
+#ifdef SH_SUPPORT_FLOAT
+  fl_lower_glo_decl(node);
+#endif
 
   if (op == DECLS) { // Variable declarations
     // - AUTO_KW and REGISTER_KW can simply be ignored.

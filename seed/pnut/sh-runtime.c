@@ -597,6 +597,11 @@ void runtime_getchar() {
   putstr("      __stdin_line_ending=0                  # Reset line ending for next getchar call\n");
   putstr("      return\n");
   putstr("    fi\n");
+#ifdef SH_BA_IO
+  // build-anywhere: a terminal in non-canonical mode is read byte by byte
+  // (seed/pnut-libc/term.sh sets __ba_raw_fd)
+  putstr("    if [ \"${__ba_raw_fd--1}\" = 0 ]; then __ba_rawbyte $1 0; return; fi\n");
+#endif
 #ifdef SH_OPTIMIZE_LONG_LINES
   putstr("    __stdin_end=0\n");
 #endif
@@ -910,6 +915,9 @@ void runtime_read_byte() {
   putstr("  # The cursor is at the end of the buffer, we need to read the next line\n");
   putstr("  if [ $((_$((__buffer + __cursor)))) -eq 0 ]; then\n");
   putstr("    # Buffer has been read completely, read next line\n");
+#ifdef SH_BA_IO
+  putstr("    if [ \"${__ba_raw_fd--1}\" = $__fd ]; then __ba_rawbyte $1 $__fd; return; fi\n");
+#endif
   putstr("    refill_buffer $__fd\n");
   putstr("    __cursor=0 # Reset cursor and reload buffer\n");
   putstr("    : $((__buffer=__buffer_fd$__fd))\n");
@@ -949,6 +957,10 @@ void runtime_write() {
   if (++runtime_write_defined - 1) return;
   runtime_open();
   putstr("_write() { : $((__fd = $2)) $((__buf = $3)) $((__count = $4))\n");
+#ifdef SH_BA_IO
+  // build-anywhere: a socket through nc is written on another fd (net.sh)
+  putstr("  if [ -n \"${__ba_net-}\" ]; then eval \"__fd=\\${__ba_wfd$__fd-$__fd}\"; fi\n");
+#endif
   putstr("  : $((__i = 0))\n");
   putstr("  while [ $__i -lt $__count ] ; do\n");
   putstr("    : $((__byte = _$((__buf+__i))))\n");
@@ -968,6 +980,9 @@ void runtime_close() {
   runtime_free();
   putstr("_close() { # $2: fd\n");
   putstr("  __fd=$2\n");
+#ifdef SH_BA_IO
+  putstr("  if [ -n \"${__ba_net-}\" ]; then __ba_net_close $__fd; __fd=$2; fi\n");
+#endif
   putstr("  __buf=$((__buffer_fd$__fd))  # Get buffer\n");
   putstr("  _free __ $__buf              # Release buffer\n");
   putstr("  : $((__state_fd$__fd = -1))  # Mark the fd as closed\n");

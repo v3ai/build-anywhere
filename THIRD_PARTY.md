@@ -37,7 +37,11 @@ vendored sources under `seed/pnut/`, `seed/pnut-sh.sh`, `seed/tcc/`,
   your program.
 - **shell**: the generated script contains pnut's runtime (BSD 2-Clause:
   keep its notice if you redistribute generated scripts) and
-  `seed/pnut-libc/libc.c` (MIT).
+  `seed/pnut-libc/libc.c` (MIT). A program that uses floating point also
+  contains `seed/pnut-libc/float.c` (MIT), whose `<math.h>` functions are
+  translated from Sun's fdlibm, under a notice that only asks to keep it
+  (it is in the file); terminal control and sockets add `term.c` and
+  `net.c` (MIT).
 
 ## Changes made to the vendored code
 
@@ -55,7 +59,12 @@ every change:
 - In `lib/libtcc1.c` the floating-point literal 2^64 is replaced by a
   function that builds the same value from its bits, because the first
   TinyCC of the bootstrap is compiled by pnut, which has no floating point.
-- `seed/pnut-sh.sh` is pnut compiled to shell by pnut itself
+- `tools/patches/pnut-shell-tier.patch` adds floating point to pnut's
+  shell backend (exact literals, and a pass that turns floating-point
+  operations into calls to `seed/pnut-libc/float.c`) and hooks in its
+  shell runtime's I/O for raw terminals and sockets. It only touches the
+  shell target: pnut's x86 compiler, used by the bootstrap, is unchanged.
+- `seed/pnut-sh.sh` is the patched pnut compiled to shell by itself
   (`pnut.c -Dtarget_sh -DNICE_UX`).
 - `tools/vendor-musl.sh` regenerates `seed/musl/` and
   `seed/linux-headers/`: musl is trimmed to i386 and x86_64 (static library

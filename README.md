@@ -179,12 +179,43 @@ first TinyCC, which pnut compiled without floating point), and on x86_64 its
 ## The shell tier
 
 When nothing else works, pnut compiles your program to a POSIX shell script,
-which then runs with `/bin/sh`. Only a subset of C works there: no floating
-point, no unsigned arithmetic, no local arrays or structs, no variadic
-functions other than `printf`, no identifiers that start with `_`, and only
-the library in `seed/pnut-libc/` (`<string.h>`, `<ctype.h>`, character I/O,
-`malloc`, `strtol`, ...). It is meant for small tools that must run
-somewhere with nothing else, and it is much slower than a native program.
+which then runs with `/bin/sh`. Only a subset of C works there: no unsigned
+arithmetic, no local arrays or struct values, no taking the address of a
+variable (`malloc` instead), no arrays or structs inside structs, no
+variadic functions other than `printf`, no identifiers that start with `_`,
+and only the library in `seed/pnut-libc/`. It is meant for small tools that
+must run somewhere with nothing else, and it is much slower than a native
+program.
+
+That library has `<string.h>`, `<ctype.h>`, character and file I/O,
+`malloc`, `strtol`, and:
+
+- **Floating point.** `double` and `float` work, with all of `<math.h>`,
+  `<float.h>`, `strtod`, `atof` and `printf`'s `%f`, `%e` and `%g`. A
+  double is kept as its IEEE-754 bit pattern in a shell integer and
+  computed in software (`seed/pnut-libc/float.c`): arithmetic and `sqrt`
+  are correctly rounded, conversions to and from text are exact, and the
+  maths functions are within 2 ULP of glibc's, so programs print the same
+  digits as when compiled by gcc. `float` is computed as `double`. It needs
+  a shell with 64-bit arithmetic, as dash, bash and BusyBox sh have on
+  64-bit systems (mksh's is 32-bit), which the program checks when it
+  starts. In dash an addition or multiplication takes about 0.2 ms and
+  `sin` about 2 ms; bash is about four times slower.
+- **Terminal control** with `stty`: `<termios.h>` (`tcgetattr`,
+  `tcsetattr`, `cfmakeraw`; the flags, `VMIN` and `VTIME` are applied, the
+  speeds and other control characters are not) and the terminal size with
+  `ioctl(fd, TIOCGWINSZ, ws)`. In non-canonical mode `getchar` and `read`
+  return each key as it is pressed, read with `dd`.
+- **TCP sockets** over IPv4 (`<sys/socket.h>`, `<netinet/in.h>`,
+  `<arpa/inet.h>`, `<netdb.h>`). POSIX sh cannot open a socket, so the
+  program borrows one: a client uses bash's or ksh93's `/dev/tcp` when it
+  runs in one of those shells, and `nc` otherwise; a server always needs
+  `nc`, which takes one client at a time. Data is read a line at a time,
+  so protocols must be text based, and `sin_addr` is the address itself
+  (`sa->sin_addr` where C has `sa.sin_addr.s_addr`).
+
+`seed/pnut-libc/net.c` and `term.c` list the differences from C in detail;
+each library is only added to programs that use it.
 
 pnut needs a shell other than the public-domain ksh, which crashes or
 hangs running it. That ksh is `/bin/ksh` on NetBSD and both `sh` and `ksh`

@@ -81,6 +81,11 @@
     // Pnut-sh specific features
     #define SH_SUPPORT_SHELL_INCLUDE
     #define SH_SUPPORT_ADDRESS_OF
+    // build-anywhere: double and float, computed in software (sh-float.c)
+    #define SH_SUPPORT_FLOAT
+    // build-anywhere: hooks in the runtime's I/O for raw terminals and
+    // sockets (seed/pnut-libc/term.sh and net.sh)
+    #define SH_BA_IO
     #define SH_OPTIMIZE_LONG_LINES
   #endif
 
@@ -761,6 +766,9 @@ enum TOKEN {
   DECLS,
   FUN_DECL,
   CAST,
+#ifdef SH_SUPPORT_FLOAT
+  DOUBLE_LIT,
+#endif
   MACRO_ARG = 499,
   IDENTIFIER = 500, // 500 because it's easy to remember
   TYPE = 501,
@@ -1780,6 +1788,10 @@ void u64_to_obj(int *x) {
 #define INIT_ACCUM_DIGIT() val = 0;
 #endif
 
+#ifdef SH_SUPPORT_FLOAT
+#include "sh-float-lit.c"
+#endif
+
 int accum_digit(int base) {
   int digit = 99;
 #ifndef DISABLE_INTEGER_OVERFLOW_CHECK
@@ -1796,9 +1808,16 @@ int accum_digit(int base) {
   if (digit >= base) {
     return 0; // character is not a digit in that base
   } else {
+#ifdef SH_SUPPORT_FLOAT
+    if (fl_rec) fl_lex_digit(digit);
+#endif
 #ifndef DISABLE_INTEGER_OVERFLOW_CHECK
     limit = MININT / base;
     if (base == 10 && if_macro_mask && ((val < limit) || ((val == limit) && (digit > limit * base - MININT)))) {
+#ifdef SH_SUPPORT_FLOAT
+      // Maybe the integer part of a floating-point literal
+      if (fl_rec) { fl_ovf = 1; get_ch(); return 1; }
+#endif
       syntax_error("literal integer overflow");
     }
 #endif
@@ -3057,11 +3076,18 @@ void get_tok() {
     } else if ('0' <= ch && ch <= '9') {
 
       INIT_ACCUM_DIGIT();
+#ifdef SH_SUPPORT_FLOAT
+      fl_lex_begin();
+      fl_rec = 1;
+#endif
 
       tok = INTEGER;
       if (ch == '0') { // val == 0 <=> ch == '0'
         get_ch();
         if (ch == 'x' || ch == 'X') {
+#ifdef SH_SUPPORT_FLOAT
+          fl_rec = 0;
+#endif
 #ifdef PARSE_NUMERIC_LITERAL_WITH_BASE
           tok = INTEGER_HEX;
 #endif
@@ -3085,6 +3111,18 @@ void get_tok() {
       } else {
         while (accum_digit(10));
       }
+
+#ifdef SH_SUPPORT_FLOAT
+      if (fl_rec && (ch == '.' || ch == 'e' || ch == 'E')) {
+        fl_rec = 0;
+        if (ch == '.') get_ch();
+        tok = DOUBLE_LIT;
+        val = fl_lex_rest();
+        break;
+      }
+      fl_rec = 0;
+      if (fl_ovf) syntax_error("literal integer overflow");
+#endif
 
 #ifdef SUPPORT_64_BIT_LITERALS
       u64_to_obj(val_32);
@@ -3339,6 +3377,14 @@ void get_tok() {
 #if defined(SUPPORT_STRUCT_UNION) || defined(SUPPORT_VARIADIC_FUNCTIONS)
       else if (ch == '.') {
         get_ch();
+#ifdef SH_SUPPORT_FLOAT
+        if ('0' <= ch && ch <= '9') { // .5
+          fl_lex_begin();
+          tok = DOUBLE_LIT;
+          val = fl_lex_rest();
+          break;
+        }
+#endif
 #ifdef SUPPORT_VARIADIC_FUNCTIONS
         if (ch == '.') {
           get_ch();
@@ -3658,7 +3704,7 @@ ast parse_struct_or_union(int struct_or_union_tok) {
 ast parse_type_specifier() {
   ast type_specifier = 0;
   if (tok == CHAR_KW || tok == INT_KW || tok == VOID_KW
-#ifdef target_exe
+#if defined(target_exe) || defined(SH_SUPPORT_FLOAT)
       || tok == FLOAT_KW || tok == DOUBLE_KW
 #endif
   ) {
@@ -3687,7 +3733,7 @@ ast parse_type_specifier() {
 #endif
   } else if (tok == LONG_KW) {
     get_tok();
-#ifdef target_exe
+#if defined(target_exe) || defined(SH_SUPPORT_FLOAT)
     if (tok == DOUBLE_KW) {
       get_tok();
       return new_ast0(DOUBLE_KW, 0);
@@ -4192,6 +4238,9 @@ ast parse_primary_expression() {
   ast rest;
 
   if (tok == IDENTIFIER || tok == CHARACTER || tok == INTEGER
+#ifdef SH_SUPPORT_FLOAT
+     || tok == DOUBLE_LIT
+#endif
 #ifdef PARSE_NUMERIC_LITERAL_WITH_BASE
      || tok == INTEGER_HEX || tok == INTEGER_OCT
 #endif

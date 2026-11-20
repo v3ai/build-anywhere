@@ -12,6 +12,10 @@
 #                        about 5 minutes)
 #   BA_TEST_SHELL_TIER=1 compile with the shell tier under every SHELL
 #                        (a few seconds per shell)
+#
+# When the shell tier works, its floating point, terminal control (in a
+# pseudo-terminal made by util-linux's script) and sockets (with nc) are
+# tested too, which takes about two minutes.
 set -u
 
 cd "$(dirname "$0")/.." || exit 1
@@ -64,7 +68,8 @@ uni="$ROOT/examples/universal/main.c $ROOT/examples/universal/p_util.c"
 
 # ---- static checks -----------------------------------------------------
 for f in build-anywhere seed/bootstrap-tcc.sh seed/cc-pnut.sh tools/vendor-seed.sh \
-         tests/run.sh tests/libc/run.sh; do
+         tests/run.sh tests/libc/run.sh seed/pnut-libc/float-check.sh \
+         seed/pnut-libc/term.sh seed/pnut-libc/net.sh; do
     if sh -n "$f"; then ok "syntax: $f"; else bad "syntax: $f"; fi
 done
 
@@ -464,6 +469,121 @@ elif sh "$BA" --doctor --cache="$T/c" 2>/dev/null | grep -q '^shell: *possible';
     shell_tier ""
 else
     skip "shell: $(sh "$BA" --doctor --cache="$T/c" 2>/dev/null | sed -n 's/^shell: *//p')"
+fi
+
+# ---- shell tier: floating point, terminal control, sockets ----------------
+shell_cc() { # OUT FILE.c: compile with the shell tier
+    rm -f "$1"
+    sh "$BA" --tiers=shell --cache="$T/cache-sh" -o "$1" "$2" 2>"$T/stderr" && return 0
+    bad "shell: compiling $2"
+    sed 's/^/      /' "$T/stderr" | tail -n 5
+    return 1
+}
+shell_libs() {
+    # Floating point: compiled once, then run under every shell that has
+    # 64-bit arithmetic; it must print exactly what gcc and glibc print.
+    if shell_cc "$T/float.sh" tests/shell/float.c; then
+        for s in $shells; do
+            pnut_shell "$s" || continue
+            fs=$s
+            [ "$s" = busybox ] && fs="busybox sh"
+            # shellcheck disable=SC2016
+            if [ "$($fs -c 'echo $((1 << 53))' 2>/dev/null)" != 9007199254740992 ]; then
+                skip "[$s] shell: floating point (the shell has no 64-bit arithmetic)"
+                continue
+            fi
+            # shellcheck disable=SC2086
+            $fs "$T/float.sh" >"$T/float.out" 2>"$T/stderr"
+            if cmp -s "$T/float.out" tests/shell/float.golden; then
+                ok "[$s] shell: floating point prints what gcc does"
+            else
+                bad "[$s] shell: floating point differs from gcc"
+                diff tests/shell/float.golden "$T/float.out" | head -n 10 | sed 's/^/      /'
+                sed 's/^/      /' "$T/stderr" | tail -n 5
+            fi
+        done
+    fi
+
+    # The other programs run in the first shell that runs pnut's scripts.
+    psh=
+    for s in $shells; do
+        if pnut_shell "$s"; then
+            psh=$s
+            [ "$s" = busybox ] && psh="busybox sh"
+            break
+        fi
+    done
+    if [ -z "$psh" ]; then
+        skip "shell: terminal control and sockets (no shell runs pnut's scripts)"
+        return
+    fi
+
+    # Terminal control, in a pseudo-terminal; keys arrive after raw mode is on.
+    if script -qec true /dev/null </dev/null >/dev/null 2>&1; then
+        if shell_cc "$T/term.sh" tests/shell/term.c; then
+            (sleep 4; printf a; sleep 1; printf '\033'; sleep 1; printf q; sleep 3) |
+                script -qec "stty cols 100 rows 30; $psh $T/term.sh" /dev/null 2>&1 |
+                tr -d '\r' >"$T/term.out"
+            cooked="icanon=1 echo=1 isig=1 icrnl=1 opost=1 cs8=1 min=1 time=0"
+            cat >"$T/term.want" <<TERM
+cooked: $cooked
+stdout: $cooked
+size 100 cols x 30 rows
+raw: icanon=0 echo=0 isig=0 icrnl=0 opost=0 cs8=1 min=1 time=0
+ready
+key 97
+key 27
+key 113
+timeout -> -1
+restored: $cooked
+TERM
+            if cmp -s "$T/term.want" "$T/term.out"; then
+                ok "shell: terminal control (termios, raw keys, window size)"
+            else
+                bad "shell: terminal control"
+                diff "$T/term.want" "$T/term.out" | head -n 12 | sed 's/^/      /'
+            fi
+        fi
+    else
+        skip "shell: terminal control (needs util-linux's script for a pseudo-terminal)"
+    fi
+
+    # Sockets: a server (with nc) and two clients, through nc and, when bash
+    # is installed, through bash's /dev/tcp.
+    if have nc; then
+        if shell_cc "$T/server.sh" tests/shell/net-server.c &&
+           shell_cc "$T/client.sh" tests/shell/net-client.c; then
+            port=$((20000 + $$ % 20000))
+            # shellcheck disable=SC2086
+            $psh "$T/server.sh" $port >"$T/server.out" 2>&1 &
+            sp=$!
+            sleep 2
+            ntoa="inet_ntoa(inet_addr(10.1.2.3)) = 10.1.2.3"
+            expect "shell: socket client (nc)" "client got: echo: one
+$ntoa" $psh "$T/client.sh" 127.0.0.1 $port one
+            sleep 2
+            if have bash; then
+                expect "shell: socket client (bash's /dev/tcp)" "client got: echo: two
+$ntoa" bash "$T/client.sh" localhost $port two
+            else
+                expect "shell: second socket client" "client got: echo: two
+$ntoa" $psh "$T/client.sh" localhost $port two
+            fi
+            sleep 2
+            kill $sp 2>/dev/null
+            wait $sp 2>/dev/null
+            if [ "$(grep -c served "$T/server.out")" = 2 ]; then
+                ok "shell: socket server (nc)"
+            else
+                bad "shell: socket server"; sed 's/^/      /' "$T/server.out" | tail -n 5
+            fi
+        fi
+    else
+        skip "shell: sockets (needs nc)"
+    fi
+}
+if sh "$BA" --doctor --cache="$T/c" 2>/dev/null | grep -q '^shell: *possible'; then
+    shell_libs
 fi
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"

@@ -191,6 +191,7 @@ readonly _DECL=478
 readonly _DECLS=479
 readonly _FUN_DECL=480
 readonly _CAST=481
+readonly _DOUBLE_LIT=482
 readonly _MACRO_ARG=499
 readonly _IDENTIFIER=500
 readonly _TYPE=501
@@ -619,6 +620,480 @@ _include_file() { let file_name $2; let relative_to $3
   endlet $1 relative_to file_name
 }
 
+__ALLOC=1 # Starting heap at 1 because 0 is the null pointer.
+
+_malloc() { # $2 = object size
+  : $((_$__ALLOC = $2)) # Track object size
+  : $(($1 = $__ALLOC + 1))
+  : $((__ALLOC += $2 + 1))
+}
+
+defarr() { _malloc $1 $2; }
+
+defarr _fl_bn_n 320
+defarr _fl_bn_m 320
+defarr _fl_bn_q 320
+defarr _fl_bits 4
+defarr _fl_digits 780
+_fl_nd=0
+_fl_exp=0
+_fl_sticky=0
+_fl_rec=0
+_fl_ovf=0
+: $((t = carry = i = add = mul = len = x = 0))
+_fl_bn_muladd() { let x $2; let len $3; let mul $4; let add $5
+  let i; let carry; let t
+  i=0
+  carry=$add
+  while [ $i -lt $len ]; do
+    t=$(((_$((x + i)) * mul) + carry))
+    : $((_$((x + i)) = t & 65535))
+    carry=$((t >> 16))
+    : $((i += 1))
+  done
+  while [ $carry != 0 ] && [ $len -lt 320 ]; do
+    : $((_$((x + len)) = carry & 65535))
+    carry=$((carry >> 16))
+    : $((len += 1))
+  done
+  : $(($1 = len))
+  endlet $1 t carry i add mul len x
+}
+
+: $((v = b = len = x = 0))
+_fl_bn_bitlen() { let x $2; let len $3
+  let b; let v
+  while [ $len -gt 0 ] && [ $((_$((x + (len - 1))))) = 0 ]; do
+    : $((len -= 1))
+  done
+  if [ $len = 0 ] ; then
+    : $(($1 = 0))
+    endlet $1 v b len x
+    return
+  fi
+  v=$((_$((x + (len - 1)))))
+  b=$(((len - 1) * 16))
+  while [ $v != 0 ]; do
+    : $((b += 1))
+    v=$((v >> 1))
+  done
+  : $(($1 = b))
+  endlet $1 v b len x
+}
+
+: $((k = len = x = 0))
+_fl_bn_bit() { let x $2; let len $3; let k $4
+  if [ $k -lt 0 ] || [ $((k / 16)) -ge $len ] ; then
+    : $(($1 = 0))
+    endlet $1 k len x
+    return
+  fi
+  : $(($1 = (_$((x + (k / 16))) >> (k % 16)) & 1))
+  endlet $1 k len x
+}
+
+: $((i = k = len = x = 0))
+_fl_bn_any_below() { let x $2; let len $3; let k $4
+  let i
+  i=0
+  if [ $k -le 0 ] ; then
+    : $(($1 = 0))
+    endlet $1 i k len x
+    return
+  fi
+  while [ $i -lt $len ] && [ $i -lt $((k / 16)) ]; do
+    if [ $((_$((x + i)))) != 0 ] ; then
+      : $(($1 = 1))
+      endlet $1 i k len x
+      return
+    fi
+    : $((i += 1))
+  done
+  if [ $i -lt $len ] && [ $((k % 16)) != 0 ] && [ $((_$((x + i)) & ((1 << (k % 16)) - 1))) != 0 ] ; then
+    : $(($1 = 1))
+    endlet $1 i k len x
+    return
+  fi
+  : $(($1 = 0))
+  endlet $1 i k len x
+}
+
+: $((lo = hi = nlen = i = bits = limbs = s = len = x = 0))
+_fl_bn_shl() { let x $2; let len $3; let s $4
+  let limbs; let bits; let i; let nlen; let hi; let lo
+  limbs=$((s / 16))
+  bits=$((s % 16))
+  if [ $len = 0 ] ; then
+    : $(($1 = 0))
+    endlet $1 lo hi nlen i bits limbs s len x
+    return
+  fi
+  nlen=$((len + limbs + 1))
+  if [ $nlen -gt 320 ] ; then
+    nlen=320
+  fi
+  i=$((nlen - 1))
+  while [ $i -ge 0 ]; do
+    hi=0
+    lo=0
+    if [ $((i - limbs)) -ge 0 ] && [ $((i - limbs)) -lt $len ] ; then
+      hi=$((_$((x + (i - limbs)))))
+    fi
+    if [ $(((i - limbs) - 1)) -ge 0 ] && [ $(((i - limbs) - 1)) -lt $len ] ; then
+      lo=$((_$((x + ((i - limbs) - 1)))))
+    fi
+    if [ $bits = 0 ] ; then
+      : $((_$((x + i)) = hi))
+    else
+      : $((_$((x + i)) = ((hi << bits) | (lo >> (16 - bits))) & 65535))
+    fi
+    : $((i -= 1))
+  done
+  while [ $nlen -gt 0 ] && [ $((_$((x + (nlen - 1))))) = 0 ]; do
+    : $((nlen -= 1))
+  done
+  : $(($1 = nlen))
+  endlet $1 lo hi nlen i bits limbs s len x
+}
+
+: $((hi = lo = i = bits = limbs = s = len = x = 0))
+_fl_bn_shr() { let x $2; let len $3; let s $4
+  let limbs; let bits; let i; let lo; let hi
+  limbs=$((s / 16))
+  bits=$((s % 16))
+  i=0
+  while [ $i -lt $len ]; do
+    lo=0
+    hi=0
+    if [ $((i + limbs)) -lt $len ] ; then
+      lo=$((_$((x + i + limbs))))
+    fi
+    if [ $((i + limbs + 1)) -lt $len ] ; then
+      hi=$((_$((x + i + limbs + 1))))
+    fi
+    : $((_$((x + i)) = ((lo >> bits) | (hi << (16 - bits))) & 65535))
+    : $((i += 1))
+  done
+  while [ $len -gt 0 ] && [ $((_$((x + (len - 1))))) = 0 ]; do
+    : $((len -= 1))
+  done
+  : $(($1 = len))
+  endlet $1 hi lo i bits limbs s len x
+}
+
+: $((i = blen = b = alen = a = 0))
+_fl_bn_ge() { let a $2; let alen $3; let b $4; let blen $5
+  let i
+  while [ $alen -gt 0 ] && [ $((_$((a + (alen - 1))))) = 0 ]; do
+    : $((alen -= 1))
+  done
+  while [ $blen -gt 0 ] && [ $((_$((b + (blen - 1))))) = 0 ]; do
+    : $((blen -= 1))
+  done
+  if [ $alen != $blen ] ; then
+    : $(($1 = alen > blen))
+    endlet $1 i blen b alen a
+    return
+  fi
+  i=$((alen - 1))
+  while [ $i -ge 0 ]; do
+    if [ $((_$((a + i)))) != $((_$((b + i)))) ] ; then
+      : $(($1 = _$((a + i)) > _$((b + i))))
+      endlet $1 i blen b alen a
+      return
+    fi
+    : $((i -= 1))
+  done
+  : $(($1 = 1))
+  endlet $1 i blen b alen a
+}
+
+: $((t = borrow = i = blen = b = alen = a = 0))
+_fl_bn_sub() { let a $2; let alen $3; let b $4; let blen $5
+  let i; let borrow; let t
+  i=0
+  borrow=0
+  while [ $i -lt $alen ]; do
+    t=$((_$((a + i)) - borrow))
+    if [ $i -lt $blen ] ; then
+      : $((t -= _$((b + i))))
+    fi
+    if [ $t -lt 0 ] ; then
+      : $((t += 65536))
+      borrow=1
+    else
+      borrow=0
+    fi
+    : $((_$((a + i)) = t))
+    : $((i += 1))
+  done
+  endlet $1 t borrow i blen b alen a
+}
+
+: $((b3 = b2 = b1 = b0 = 0))
+_fl_set_bits() { let b0 $2; let b1 $3; let b2 $4; let b3 $5
+  : $((_$((_fl_bits + 0)) = b0))
+  : $((_$((_fl_bits + 1)) = b1))
+  : $((_$((_fl_bits + 2)) = b2))
+  : $((_$((_fl_bits + 3)) = b3))
+  endlet $1 b3 b2 b1 b0
+}
+
+: $((__t1 = sign = m3 = m2 = m1 = m0 = rnd = drop = biased = len = neg = sticky = e = xlen = x = 0))
+_fl_round() { let x $2; let xlen $3; let e $4; let sticky $5; let neg $6
+  let len; let biased; let drop; let rnd; let m0; let m1; let m2; let m3; let sign; let __t1
+  _fl_bn_bitlen len $x $xlen
+  rnd=0
+  sign=0
+  if [ $neg != 0 ] ; then
+    sign=32768
+  fi
+  if [ $len = 0 ] ; then
+    _fl_set_bits __ 0 0 0 $sign
+    endlet $1 __t1 sign m3 m2 m1 m0 rnd drop biased len neg sticky e xlen x
+    return
+  fi
+  biased=$(((len - 1) + e + 1023))
+  if [ $biased -ge 1 ] ; then
+    drop=$((len - 53))
+  else
+    drop=$((-(e + 1074)))
+  fi
+  if [ $drop -gt 0 ] ; then
+    _fl_bn_bit rnd $x $xlen $((drop - 1))
+    if _fl_bn_any_below __t1 $x $xlen $((drop - 1)); [ $__t1 != 0 ] ; then
+      sticky=1
+    fi
+    _fl_bn_shr xlen $x $xlen $drop
+  elif [ $drop -lt 0 ] ; then
+    _fl_bn_shl xlen $x $xlen $((- drop))
+  fi
+  if [ $biased -lt 1 ] ; then
+    biased=0
+  fi
+  m0=0
+  m1=0
+  m2=0
+  m3=0
+  if [ $xlen -gt 0 ] ; then
+    m0=$((_$((x + 0))))
+  fi
+  if [ $xlen -gt 1 ] ; then
+    m1=$((_$((x + 1))))
+  fi
+  if [ $xlen -gt 2 ] ; then
+    m2=$((_$((x + 2))))
+  fi
+  if [ $xlen -gt 3 ] ; then
+    m3=$((_$((x + 3))))
+  fi
+  if [ $rnd != 0 ] && { [ $sticky != 0 ] || [ $((m0 & 1)) != 0 ]; } ; then
+    : $((m0 += 1))
+    if [ $m0 = 65536 ] ; then
+      m0=0
+      : $((m1 += 1))
+    fi
+    if [ $m1 = 65536 ] ; then
+      m1=0
+      : $((m2 += 1))
+    fi
+    if [ $m2 = 65536 ] ; then
+      m2=0
+      : $((m3 += 1))
+    fi
+  fi
+  if [ $biased = 0 ] ; then
+    if [ $m3 -ge 16 ] ; then
+      biased=1
+      : $((m3 -= 16))
+    fi
+  else
+    if [ $m3 -ge 32 ] ; then
+      m3=16
+      : $((biased += 1))
+    fi
+    : $((m3 -= 16))
+  fi
+  if [ $biased -ge 2047 ] ; then
+    _fl_set_bits __ 0 0 0 $((sign | 32752))
+    endlet $1 __t1 sign m3 m2 m1 m0 rnd drop biased len neg sticky e xlen x
+    return
+  fi
+  _fl_set_bits __ $m0 $m1 $m2 $((sign | (biased << 4) | m3))
+  endlet $1 __t1 sign m3 m2 m1 m0 rnd drop biased len neg sticky e xlen x
+}
+
+: $((__t2 = __t1 = s = bl = k = i = qlen = mlen = nlen = neg = sticky = exp10 = nd = digits = 0))
+_fl_convert() { let digits $2; let nd $3; let exp10 $4; let sticky $5; let neg $6
+  let nlen; let mlen; let qlen; let i; let k; let bl; let s; let __t1; let __t2
+  nlen=0
+  while [ $nd -gt 0 ] && [ $((_$((digits + 0)))) = 0 ]; do
+    : $((digits += 1))
+    : $((nd -= 1))
+  done
+  while [ $nd -gt 0 ] && [ $((_$((digits + (nd - 1))))) = 0 ]; do
+    : $((nd -= 1))
+    : $((exp10 += 1))
+  done
+  if [ $nd = 0 ] ; then
+    _fl_round __ $_fl_bn_n 0 0 0 $neg
+    endlet $1 __t2 __t1 s bl k i qlen mlen nlen neg sticky exp10 nd digits
+    return
+  fi
+  if [ $((nd + exp10)) -gt 310 ] ; then
+    if [ $neg != 0 ] ; then
+      _fl_set_bits __ 0 0 0 65520
+    else
+      _fl_set_bits __ 0 0 0 32752
+    fi
+    endlet $1 __t2 __t1 s bl k i qlen mlen nlen neg sticky exp10 nd digits
+    return
+  fi
+  if [ $((nd + exp10)) -lt -324 ] ; then
+    _fl_round __ $_fl_bn_n 0 0 0 $neg
+    endlet $1 __t2 __t1 s bl k i qlen mlen nlen neg sticky exp10 nd digits
+    return
+  fi
+  i=0
+  while [ $i -lt $nd ]; do
+    _fl_bn_muladd nlen $_fl_bn_n $nlen 10 $((_$((digits + i))))
+    : $((i += 1))
+  done
+  if [ $sticky != 0 ] ; then
+    _fl_bn_muladd nlen $_fl_bn_n $nlen 10 1
+    : $((exp10 -= 1))
+  fi
+  if [ $exp10 -ge 0 ] ; then
+    i=0
+    while [ $i -lt $exp10 ]; do
+      _fl_bn_muladd nlen $_fl_bn_n $nlen 10 0
+      : $((i += 1))
+    done
+    _fl_round __ $_fl_bn_n $nlen 0 0 $neg
+    endlet $1 __t2 __t1 s bl k i qlen mlen nlen neg sticky exp10 nd digits
+    return
+  fi
+  : $((_$((_fl_bn_m + 0)) = 1))
+  mlen=1
+  i=0
+  while [ $i -lt $((- exp10)) ]; do
+    _fl_bn_muladd mlen $_fl_bn_m $mlen 10 0
+    : $((i += 1))
+  done
+  _fl_bn_bitlen __t1 $_fl_bn_m $mlen
+  _fl_bn_bitlen __t2 $_fl_bn_n $nlen
+  k=$(((__t1 + 57) - __t2))
+  if [ $k -lt 0 ] ; then
+    k=0
+  fi
+  _fl_bn_shl nlen $_fl_bn_n $nlen $k
+  _fl_bn_bitlen __t1 $_fl_bn_n $nlen
+  _fl_bn_bitlen __t2 $_fl_bn_m $mlen
+  bl=$((__t1 - __t2))
+  if [ $bl -lt 0 ] ; then
+    bl=0
+  fi
+  _fl_bn_shl mlen $_fl_bn_m $mlen $bl
+  qlen=$(((bl / 16) + 1))
+  i=0
+  while [ $i -lt $qlen ]; do
+    : $((_$((_fl_bn_q + i)) = 0))
+    : $((i += 1))
+  done
+  s=$bl
+  while [ $s -ge 0 ]; do
+    if _fl_bn_ge __t1 $_fl_bn_n $nlen $_fl_bn_m $mlen; [ $__t1 != 0 ] ; then
+      _fl_bn_sub __ $_fl_bn_n $nlen $_fl_bn_m $mlen
+      : $((_$((_fl_bn_q + s / 16)) = _$((_fl_bn_q + (s / 16))) | (1 << (s % 16))))
+    fi
+    _fl_bn_shr mlen $_fl_bn_m $mlen 1
+    : $((s -= 1))
+  done
+  _fl_bn_bitlen __t1 $_fl_bn_n $nlen
+  _fl_round __ $_fl_bn_q $qlen $((- k)) $((__t1 != 0)) $neg
+  endlet $1 __t2 __t1 s bl k i qlen mlen nlen neg sticky exp10 nd digits
+}
+
+_fl_lex_begin() {
+  _fl_nd=0
+  _fl_exp=0
+  _fl_sticky=0
+  _fl_ovf=0
+}
+
+: $((d = 0))
+_fl_lex_digit() { let d $2
+  if [ $_fl_nd = 0 ] && [ $d = 0 ] ; then
+    endlet $1 d
+    return
+  fi
+  if [ $_fl_nd -lt 780 ] ; then
+    : $((_$((_fl_digits + _fl_nd)) = d))
+    : $((_fl_nd += 1))
+  else
+    : $((_fl_exp += 1))
+    if [ $d != 0 ] ; then
+      _fl_sticky=1
+    fi
+  fi
+  endlet $1 d
+}
+
+: $((d = 0))
+_fl_lex_frac_digit() { let d $2
+  if [ $_fl_nd = 0 ] && [ $d = 0 ] ; then
+    : $((_fl_exp -= 1))
+  elif [ $_fl_nd -lt 780 ] ; then
+    : $((_$((_fl_digits + _fl_nd)) = d))
+    : $((_fl_nd += 1))
+    : $((_fl_exp -= 1))
+  elif [ $d != 0 ] ; then
+    _fl_sticky=1
+  fi
+  endlet $1 d
+}
+
+: $((obj = e = esign = 0))
+_fl_lex_rest() {
+  let esign; let e; let obj
+  esign=1
+  e=0
+  while [ $__0__ -le $_ch ] && [ $_ch -le $__9__ ]; do
+    _fl_lex_frac_digit __ $((_ch - __0__))
+    _get_ch __
+  done
+  if [ $_ch = $__e__ ] || [ $_ch = $__E__ ] ; then
+    _get_ch __
+    if [ $_ch = $__PLUS__ ] ; then
+      _get_ch __
+    elif [ $_ch = $__MINUS__ ] ; then
+      esign=-1
+      _get_ch __
+    fi
+    if [ $_ch -lt $__0__ ] || [ $_ch -gt $__9__ ] ; then
+      defstr __str_13 "invalid floating-point exponent"
+      _syntax_error __ $__str_13
+    fi
+    while [ $__0__ -le $_ch ] && [ $_ch -le $__9__ ]; do
+      if [ $e -lt 100000 ] ; then
+        e=$((((e * 10) + _ch) - __0__))
+      fi
+      _get_ch __
+    done
+  fi
+  if [ $_ch = $__f__ ] || [ $_ch = $__F__ ] || [ $_ch = $__l__ ] || [ $_ch = $__L__ ] ; then
+    _get_ch __
+  fi
+  _fl_convert __ $_fl_digits $_fl_nd $((_fl_exp + (esign * e))) $_fl_sticky 0
+  _alloc_obj obj 4
+  : $((_$((_heap + obj)) = _$((_fl_bits + 0))))
+  : $((_$((_heap + obj + 1)) = _$((_fl_bits + 1))))
+  : $((_$((_heap + obj + 2)) = _$((_fl_bits + 2))))
+  : $((_$((_heap + obj + 3)) = _$((_fl_bits + 3))))
+  : $(($1 = obj))
+  endlet $1 obj e esign
+}
+
 : $((limit = MININT = digit = base = 0))
 _accum_digit() { let base $2
   let digit; let MININT; let limit
@@ -634,10 +1109,20 @@ _accum_digit() { let base $2
   if [ $digit -ge $base ] ; then
     : $(($1 = 0))
   else
+    if [ $_fl_rec != 0 ] ; then
+      _fl_lex_digit __ $digit
+    fi
     limit=$((MININT / base))
     if [ $base = 10 ] && [ $_if_macro_mask != 0 ] && { [ $_val -lt $limit ] || { [ $_val = $limit ] && [ $digit -gt $(((limit * base) - MININT)) ]; }; } ; then
-      defstr __str_13 "literal integer overflow"
-      _syntax_error __ $__str_13
+      if [ $_fl_rec != 0 ] ; then
+        _fl_ovf=1
+        _get_ch __
+        : $(($1 = 1))
+        endlet $1 limit MININT digit base
+        return
+      fi
+      defstr __str_14 "literal integer overflow"
+      _syntax_error __ $__str_14
     fi
     _val=$(((_val * base) - digit))
     _get_ch __
@@ -664,8 +1149,8 @@ _get_string_char() {
       if _accum_digit __t1 16; [ $__t1 != 0 ] ; then
         _accum_digit __ 16
       else
-        defstr __str_14 "invalid hex escape -- it must have at least one digit"
-        _syntax_error __ $__str_14
+        defstr __str_15 "invalid hex escape -- it must have at least one digit"
+        _syntax_error __ $__str_15
       fi
       _val=$((- _val % 256))
     else
@@ -686,8 +1171,8 @@ _get_string_char() {
       elif [ $_ch = $__BACKSLASH__ ] || [ $_ch = $__QUOTE__ ] || [ $_ch = $__DQUOTE__ ] ; then
         _val=$_ch
       else
-        defstr __str_15 "unimplemented string character escape"
-        _syntax_error __ $__str_15
+        defstr __str_16 "unimplemented string character escape"
+        _syntax_error __ $__str_16
       fi
       _get_ch __
     fi
@@ -702,8 +1187,8 @@ _accum_string_until() { let end $2
     _accum_symbol_char __ $_val
   done
   if [ $_ch != $end ] ; then
-    defstr __str_16 "unterminated string literal"
-    _syntax_error __ $__str_16
+    defstr __str_17 "unterminated string literal"
+    _syntax_error __ $__str_17
   fi
   _get_ch __
   endlet $1 end
@@ -815,8 +1300,8 @@ _read_macro_tokens() { let args $2
       _get_tok_macro __ 1
     done
     if { _car __t1 $toks; _car __t1 $__t1; [ $__t1 = $_HASH_HASH ]; } || { _car __t1 $rest; _car __t1 $__t1; [ $__t1 = $_HASH_HASH ]; } ; then
-      defstr __str_17 "'##' cannot appear at either end of a macro expansion"
-      _syntax_error __ $__str_17
+      defstr __str_18 "'##' cannot appear at either end of a macro expansion"
+      _syntax_error __ $__str_18
     fi
   fi
   : $(($1 = toks))
@@ -829,8 +1314,8 @@ _handle_define() {
   args=0
   args_count=-1
   if [ $_tok != $_IDENTIFIER ] && [ $_tok != $_MACRO ] && { [ $_tok -lt $_KEYWORDS_START ] || [ $_tok -gt $_KEYWORDS_END ]; } ; then
-    defstr __str_18 "#define directive can only be followed by a identifier"
-    _syntax_error __ $__str_18
+    defstr __str_19 "#define directive can only be followed by a identifier"
+    _syntax_error __ $__str_19
   fi
   _set_symbol_type __ $_val $_MACRO
   macro=$_val
@@ -942,19 +1427,19 @@ _compute_constant() { let expr $2; let if_macro $3
       _get_child __t1 $expr 1
       : $(($1 = __t1 == _MACRO))
     else
-      defstr __str_19 "unknown function call in constant expressions"
-      _syntax_error __ $__str_19
+      defstr __str_20 "unknown function call in constant expressions"
+      _syntax_error __ $__str_20
       : $(($1 = 0))
     fi
   elif [ $op = $_IDENTIFIER ] ; then
     if [ $((! if_macro)) != 0 ] ; then
-      defstr __str_20 "identifiers are not allowed in constant expression"
-      _syntax_error __ $__str_20
+      defstr __str_21 "identifiers are not allowed in constant expression"
+      _syntax_error __ $__str_21
     fi
     : $(($1 = 0))
   else
-    defstr __str_21 "unsupported operator in constant expression"
-    _syntax_error __ $__str_21
+    defstr __str_22 "unsupported operator in constant expression"
+    _syntax_error __ $__str_22
     : $(($1 = 0))
   fi
   endlet $1 __t1 val1 val0 op if_macro expr
@@ -983,8 +1468,8 @@ _handle_include() {
     _skip_to_end_of_line __
     _include_file __ $buf $_fd_dirname
     _strrchr ext $buf $__PERIOD__
-    defstr __str_22 ".sh"
-    if [ $ext != 0 ] && { _strcmp __t1 $ext $__str_22; [ $__t1 = 0 ]; } ; then
+    defstr __str_23 ".sh"
+    if [ $ext != 0 ] && { _strcmp __t1 $ext $__str_23; [ $__t1 = 0 ]; } ; then
       _handle_shell_include __
     fi
     _tok=$__LF__
@@ -1002,8 +1487,8 @@ _handle_include() {
     _tok=$__LF__
     : $(($1 = 1))
   else
-    defstr __str_23 "expected string to #include directive"
-    _syntax_error __ $__str_23
+    defstr __str_24 "expected string to #include directive"
+    _syntax_error __ $__str_24
     : $(($1 = 0))
   fi
   endlet $1 __t1 ext buf
@@ -1052,17 +1537,17 @@ _handle_preprocessor_directive() {
           _set_symbol_type __ $_val $_IDENTIFIER
           _get_tok_macro __ 1
         else
-          defstr __str_24 "#undef directive can only be followed by a identifier"
-          _syntax_error __ $__str_24
+          defstr __str_25 "#undef directive can only be followed by a identifier"
+          _syntax_error __ $__str_25
         fi
       elif [ $_tok = $_IDENTIFIER ] && [ $_val = $_DEFINE_ID ] ; then
         _get_tok_macro __ 1
         _handle_define __
       elif [ $_tok = $_IDENTIFIER ] && { [ $_val = $_WARNING_ID ] || [ $_val = $_ERROR_ID ]; } ; then
         temp=$_val
-        defstr __str_25 "warning: "
-        defstr __str_26 "error: "
-        _putstr __ $(((temp == _WARNING_ID) ? __str_25 : __str_26))
+        defstr __str_26 "warning: "
+        defstr __str_27 "error: "
+        _putstr __ $(((temp == _WARNING_ID) ? __str_26 : __str_27))
         while [ $_ch != $__LF__ ] && [ $_ch != -1 ]; do
           printf %b \\0$((_ch/64))$((_ch/8%8))$((_ch%8))
           _get_ch __
@@ -1073,8 +1558,8 @@ _handle_preprocessor_directive() {
           exit 1
         fi
       else
-        defstr __str_27 "unsupported preprocessor directive"
-        _syntax_error __ $__str_27
+        defstr __str_28 "unsupported preprocessor directive"
+        _syntax_error __ $__str_28
       fi
     else
       while [ $_tok != $__LF__ ] && [ $_tok != -1 ]; do
@@ -1085,8 +1570,8 @@ _handle_preprocessor_directive() {
       if [ $_tok = $_IDENTIFIER ] || [ $_tok = $_MACRO ] ; then
         :
       fi
-      defstr __str_28 "preprocessor expected end of line"
-      _syntax_error __ $__str_28
+      defstr __str_29 "preprocessor expected end of line"
+      _syntax_error __ $__str_29
     fi
     if [ $((! _if_macro_mask)) != 0 ] ; then
       while _skip_inactive_line __t1; [ $((!__t1)) != 0 ]; do
@@ -1142,162 +1627,162 @@ _init_ident_table() {
     : $((_$((_heap + i)) = 0))
     : $((i += 1))
   done
-  defstr __str_29 "break"
-  _init_ident __ $_BREAK_KW $__str_29
-  defstr __str_30 "case"
-  _init_ident __ $_CASE_KW $__str_30
-  defstr __str_31 "continue"
-  _init_ident __ $_CONTINUE_KW $__str_31
-  defstr __str_32 "default"
-  _init_ident __ $_DEFAULT_KW $__str_32
-  defstr __str_33 "do"
-  _init_ident __ $_DO_KW $__str_33
-  defstr __str_34 "else"
-  _init_ident __ $_ELSE_KW $__str_34
-  defstr __str_35 "for"
-  _init_ident __ $_FOR_KW $__str_35
-  defstr __str_36 "if"
-  _init_ident __ $_IF_KW $__str_36
-  defstr __str_37 "return"
-  _init_ident __ $_RETURN_KW $__str_37
-  defstr __str_38 "sizeof"
-  _init_ident __ $_SIZEOF_KW $__str_38
-  defstr __str_39 "switch"
-  _init_ident __ $_SWITCH_KW $__str_39
-  defstr __str_40 "while"
-  _init_ident __ $_WHILE_KW $__str_40
-  defstr __str_41 "char"
-  _init_ident __ $_CHAR_KW $__str_41
-  defstr __str_42 "double"
-  _init_ident __ $_DOUBLE_KW $__str_42
-  defstr __str_43 "enum"
-  _init_ident __ $_ENUM_KW $__str_43
-  defstr __str_44 "float"
-  _init_ident __ $_FLOAT_KW $__str_44
-  defstr __str_45 "int"
-  _init_ident __ $_INT_KW $__str_45
-  defstr __str_46 "long"
-  _init_ident __ $_LONG_KW $__str_46
-  defstr __str_47 "short"
-  _init_ident __ $_SHORT_KW $__str_47
-  defstr __str_48 "signed"
-  _init_ident __ $_SIGNED_KW $__str_48
-  defstr __str_49 "unsigned"
-  _init_ident __ $_UNSIGNED_KW $__str_49
-  defstr __str_50 "void"
-  _init_ident __ $_VOID_KW $__str_50
-  defstr __str_51 "const"
-  _init_ident __ $_CONST_KW $__str_51
-  defstr __str_52 "auto"
-  _init_ident __ $_AUTO_KW $__str_52
-  defstr __str_53 "extern"
-  _init_ident __ $_EXTERN_KW $__str_53
-  defstr __str_54 "inline"
-  _init_ident __ $_INLINE_KW $__str_54
-  defstr __str_55 "register"
-  _init_ident __ $_REGISTER_KW $__str_55
-  defstr __str_56 "static"
-  _init_ident __ $_STATIC_KW $__str_56
-  defstr __str_57 "typedef"
-  _init_ident __ $_TYPEDEF_KW $__str_57
-  defstr __str_58 "volatile"
-  _init_ident __ $_VOLATILE_KW $__str_58
-  defstr __str_59 "goto"
-  _init_ident __ $_GOTO_KW $__str_59
-  defstr __str_60 "struct"
-  _init_ident __ $_STRUCT_KW $__str_60
-  defstr __str_61 "union"
-  _init_ident __ $_UNION_KW $__str_61
-  defstr __str_62 "ifdef"
-  _init_ident _IFDEF_ID $_IDENTIFIER $__str_62
-  defstr __str_63 "ifndef"
-  _init_ident _IFNDEF_ID $_IDENTIFIER $__str_63
-  defstr __str_64 "elif"
-  _init_ident _ELIF_ID $_IDENTIFIER $__str_64
-  defstr __str_65 "endif"
-  _init_ident _ENDIF_ID $_IDENTIFIER $__str_65
-  defstr __str_66 "define"
-  _init_ident _DEFINE_ID $_IDENTIFIER $__str_66
-  defstr __str_67 "undef"
-  _init_ident _UNDEF_ID $_IDENTIFIER $__str_67
-  defstr __str_68 "include"
-  _init_ident _INCLUDE_ID $_IDENTIFIER $__str_68
-  defstr __str_69 "defined"
-  _init_ident _DEFINED_ID $_IDENTIFIER $__str_69
-  defstr __str_70 "main"
-  _init_ident _MAIN_ID $_IDENTIFIER $__str_70
-  defstr __str_71 "putchar"
-  _init_ident _PUTCHAR_ID $_IDENTIFIER $__str_71
-  defstr __str_72 "exit"
-  _init_ident _EXIT_ID $_IDENTIFIER $__str_72
-  defstr __str_73 "malloc"
-  _init_ident _MALLOC_ID $_IDENTIFIER $__str_73
-  defstr __str_74 "free"
-  _init_ident _FREE_ID $_IDENTIFIER $__str_74
-  defstr __str_75 "printf"
-  _init_ident _PRINTF_ID $_IDENTIFIER $__str_75
-  defstr __str_76 "putstr"
-  _init_ident _PUTSTR_ID $_IDENTIFIER $__str_76
-  defstr __str_77 "puts"
-  _init_ident _PUTS_ID $_IDENTIFIER $__str_77
-  defstr __str_78 "read"
-  _init_ident _READ_ID $_IDENTIFIER $__str_78
-  defstr __str_79 "write"
-  _init_ident _WRITE_ID $_IDENTIFIER $__str_79
-  defstr __str_80 "open"
-  _init_ident _OPEN_ID $_IDENTIFIER $__str_80
-  defstr __str_81 "close"
-  _init_ident _CLOSE_ID $_IDENTIFIER $__str_81
-  defstr __str_82 "getchar"
-  _init_ident _GETCHAR_ID $_IDENTIFIER $__str_82
-  defstr __str_83 "fopen"
-  _init_ident _FOPEN_ID $_IDENTIFIER $__str_83
-  defstr __str_84 "fclose"
-  _init_ident _FCLOSE_ID $_IDENTIFIER $__str_84
-  defstr __str_85 "fgetc"
-  _init_ident _FGETC_ID $_IDENTIFIER $__str_85
-  defstr __str_86 "isatty"
-  _init_ident _ISATTY_ID $_IDENTIFIER $__str_86
-  defstr __str_87 "argv"
-  _init_ident _ARGV_ID $_IDENTIFIER $__str_87
-  defstr __str_88 "argv_"
-  _init_ident _ARGV__ID $_IDENTIFIER $__str_88
-  defstr __str_89 "ENV"
-  _init_ident _ENV_ID $_IDENTIFIER $__str_89
-  defstr __str_90 "HOME"
-  _init_ident _HOME_ID $_IDENTIFIER $__str_90
-  defstr __str_91 "IFS"
-  _init_ident _IFS_ID $_IDENTIFIER $__str_91
-  defstr __str_92 "LANG"
-  _init_ident _LANG_ID $_IDENTIFIER $__str_92
-  defstr __str_93 "LC_ALL"
-  _init_ident _LC_ALL_ID $_IDENTIFIER $__str_93
-  defstr __str_94 "LC_COLLATE"
-  _init_ident _LC_COLLATE_ID $_IDENTIFIER $__str_94
-  defstr __str_95 "LC_CTYPE"
-  _init_ident _LC_CTYPE_ID $_IDENTIFIER $__str_95
-  defstr __str_96 "LC_MESSAGES"
-  _init_ident _LC_MESSAGES_ID $_IDENTIFIER $__str_96
-  defstr __str_97 "LINENO"
-  _init_ident _LINENO_ID $_IDENTIFIER $__str_97
-  defstr __str_98 "NLSPATH"
-  _init_ident _NLSPATH_ID $_IDENTIFIER $__str_98
-  defstr __str_99 "PATH"
-  _init_ident _PATH_ID $_IDENTIFIER $__str_99
-  defstr __str_100 "PPID"
-  _init_ident _PPID_ID $_IDENTIFIER $__str_100
-  defstr __str_101 "PS1"
-  _init_ident _PS1_ID $_IDENTIFIER $__str_101
-  defstr __str_102 "PS4"
-  _init_ident _PS4_ID $_IDENTIFIER $__str_102
-  defstr __str_103 "PWD"
-  _init_ident _PWD_ID $_IDENTIFIER $__str_103
-  defstr __str_104 "warning"
-  _init_ident _WARNING_ID $_IDENTIFIER $__str_104
-  defstr __str_105 "error"
-  _init_ident _ERROR_ID $_IDENTIFIER $__str_105
-  defstr __str_106 "NOT_SUPPORTED"
-  _init_ident _NOT_SUPPORTED_ID $_IDENTIFIER $__str_106
+  defstr __str_30 "break"
+  _init_ident __ $_BREAK_KW $__str_30
+  defstr __str_31 "case"
+  _init_ident __ $_CASE_KW $__str_31
+  defstr __str_32 "continue"
+  _init_ident __ $_CONTINUE_KW $__str_32
+  defstr __str_33 "default"
+  _init_ident __ $_DEFAULT_KW $__str_33
+  defstr __str_34 "do"
+  _init_ident __ $_DO_KW $__str_34
+  defstr __str_35 "else"
+  _init_ident __ $_ELSE_KW $__str_35
+  defstr __str_36 "for"
+  _init_ident __ $_FOR_KW $__str_36
+  defstr __str_37 "if"
+  _init_ident __ $_IF_KW $__str_37
+  defstr __str_38 "return"
+  _init_ident __ $_RETURN_KW $__str_38
+  defstr __str_39 "sizeof"
+  _init_ident __ $_SIZEOF_KW $__str_39
+  defstr __str_40 "switch"
+  _init_ident __ $_SWITCH_KW $__str_40
+  defstr __str_41 "while"
+  _init_ident __ $_WHILE_KW $__str_41
+  defstr __str_42 "char"
+  _init_ident __ $_CHAR_KW $__str_42
+  defstr __str_43 "double"
+  _init_ident __ $_DOUBLE_KW $__str_43
+  defstr __str_44 "enum"
+  _init_ident __ $_ENUM_KW $__str_44
+  defstr __str_45 "float"
+  _init_ident __ $_FLOAT_KW $__str_45
+  defstr __str_46 "int"
+  _init_ident __ $_INT_KW $__str_46
+  defstr __str_47 "long"
+  _init_ident __ $_LONG_KW $__str_47
+  defstr __str_48 "short"
+  _init_ident __ $_SHORT_KW $__str_48
+  defstr __str_49 "signed"
+  _init_ident __ $_SIGNED_KW $__str_49
+  defstr __str_50 "unsigned"
+  _init_ident __ $_UNSIGNED_KW $__str_50
+  defstr __str_51 "void"
+  _init_ident __ $_VOID_KW $__str_51
+  defstr __str_52 "const"
+  _init_ident __ $_CONST_KW $__str_52
+  defstr __str_53 "auto"
+  _init_ident __ $_AUTO_KW $__str_53
+  defstr __str_54 "extern"
+  _init_ident __ $_EXTERN_KW $__str_54
+  defstr __str_55 "inline"
+  _init_ident __ $_INLINE_KW $__str_55
+  defstr __str_56 "register"
+  _init_ident __ $_REGISTER_KW $__str_56
+  defstr __str_57 "static"
+  _init_ident __ $_STATIC_KW $__str_57
+  defstr __str_58 "typedef"
+  _init_ident __ $_TYPEDEF_KW $__str_58
+  defstr __str_59 "volatile"
+  _init_ident __ $_VOLATILE_KW $__str_59
+  defstr __str_60 "goto"
+  _init_ident __ $_GOTO_KW $__str_60
+  defstr __str_61 "struct"
+  _init_ident __ $_STRUCT_KW $__str_61
+  defstr __str_62 "union"
+  _init_ident __ $_UNION_KW $__str_62
+  defstr __str_63 "ifdef"
+  _init_ident _IFDEF_ID $_IDENTIFIER $__str_63
+  defstr __str_64 "ifndef"
+  _init_ident _IFNDEF_ID $_IDENTIFIER $__str_64
+  defstr __str_65 "elif"
+  _init_ident _ELIF_ID $_IDENTIFIER $__str_65
+  defstr __str_66 "endif"
+  _init_ident _ENDIF_ID $_IDENTIFIER $__str_66
+  defstr __str_67 "define"
+  _init_ident _DEFINE_ID $_IDENTIFIER $__str_67
+  defstr __str_68 "undef"
+  _init_ident _UNDEF_ID $_IDENTIFIER $__str_68
+  defstr __str_69 "include"
+  _init_ident _INCLUDE_ID $_IDENTIFIER $__str_69
+  defstr __str_70 "defined"
+  _init_ident _DEFINED_ID $_IDENTIFIER $__str_70
+  defstr __str_71 "main"
+  _init_ident _MAIN_ID $_IDENTIFIER $__str_71
+  defstr __str_72 "putchar"
+  _init_ident _PUTCHAR_ID $_IDENTIFIER $__str_72
+  defstr __str_73 "exit"
+  _init_ident _EXIT_ID $_IDENTIFIER $__str_73
+  defstr __str_74 "malloc"
+  _init_ident _MALLOC_ID $_IDENTIFIER $__str_74
+  defstr __str_75 "free"
+  _init_ident _FREE_ID $_IDENTIFIER $__str_75
+  defstr __str_76 "printf"
+  _init_ident _PRINTF_ID $_IDENTIFIER $__str_76
+  defstr __str_77 "putstr"
+  _init_ident _PUTSTR_ID $_IDENTIFIER $__str_77
+  defstr __str_78 "puts"
+  _init_ident _PUTS_ID $_IDENTIFIER $__str_78
+  defstr __str_79 "read"
+  _init_ident _READ_ID $_IDENTIFIER $__str_79
+  defstr __str_80 "write"
+  _init_ident _WRITE_ID $_IDENTIFIER $__str_80
+  defstr __str_81 "open"
+  _init_ident _OPEN_ID $_IDENTIFIER $__str_81
+  defstr __str_82 "close"
+  _init_ident _CLOSE_ID $_IDENTIFIER $__str_82
+  defstr __str_83 "getchar"
+  _init_ident _GETCHAR_ID $_IDENTIFIER $__str_83
+  defstr __str_84 "fopen"
+  _init_ident _FOPEN_ID $_IDENTIFIER $__str_84
+  defstr __str_85 "fclose"
+  _init_ident _FCLOSE_ID $_IDENTIFIER $__str_85
+  defstr __str_86 "fgetc"
+  _init_ident _FGETC_ID $_IDENTIFIER $__str_86
+  defstr __str_87 "isatty"
+  _init_ident _ISATTY_ID $_IDENTIFIER $__str_87
+  defstr __str_88 "argv"
+  _init_ident _ARGV_ID $_IDENTIFIER $__str_88
+  defstr __str_89 "argv_"
+  _init_ident _ARGV__ID $_IDENTIFIER $__str_89
+  defstr __str_90 "ENV"
+  _init_ident _ENV_ID $_IDENTIFIER $__str_90
+  defstr __str_91 "HOME"
+  _init_ident _HOME_ID $_IDENTIFIER $__str_91
+  defstr __str_92 "IFS"
+  _init_ident _IFS_ID $_IDENTIFIER $__str_92
+  defstr __str_93 "LANG"
+  _init_ident _LANG_ID $_IDENTIFIER $__str_93
+  defstr __str_94 "LC_ALL"
+  _init_ident _LC_ALL_ID $_IDENTIFIER $__str_94
+  defstr __str_95 "LC_COLLATE"
+  _init_ident _LC_COLLATE_ID $_IDENTIFIER $__str_95
+  defstr __str_96 "LC_CTYPE"
+  _init_ident _LC_CTYPE_ID $_IDENTIFIER $__str_96
+  defstr __str_97 "LC_MESSAGES"
+  _init_ident _LC_MESSAGES_ID $_IDENTIFIER $__str_97
+  defstr __str_98 "LINENO"
+  _init_ident _LINENO_ID $_IDENTIFIER $__str_98
+  defstr __str_99 "NLSPATH"
+  _init_ident _NLSPATH_ID $_IDENTIFIER $__str_99
+  defstr __str_100 "PATH"
+  _init_ident _PATH_ID $_IDENTIFIER $__str_100
+  defstr __str_101 "PPID"
+  _init_ident _PPID_ID $_IDENTIFIER $__str_101
+  defstr __str_102 "PS1"
+  _init_ident _PS1_ID $_IDENTIFIER $__str_102
+  defstr __str_103 "PS4"
+  _init_ident _PS4_ID $_IDENTIFIER $__str_103
+  defstr __str_104 "PWD"
+  _init_ident _PWD_ID $_IDENTIFIER $__str_104
+  defstr __str_105 "warning"
+  _init_ident _WARNING_ID $_IDENTIFIER $__str_105
+  defstr __str_106 "error"
+  _init_ident _ERROR_ID $_IDENTIFIER $__str_106
+  defstr __str_107 "NOT_SUPPORTED"
+  _init_ident _NOT_SUPPORTED_ID $_IDENTIFIER $__str_107
   endlet $1 i
 }
 
@@ -1350,24 +1835,24 @@ _set_builtin_empty_macro() { let macro_id $2
 }
 
 _init_pnut_macros() {
-  defstr __str_107 "PNUT_CC"
-  _init_builtin_int_macro __ $__str_107 1
-  defstr __str_108 "__DATE__"
-  defstr __str_109 "Jan  1 1970"
-  _init_builtin_string_macro __ $__str_108 $__str_109
-  defstr __str_110 "__TIME__"
-  defstr __str_111 "00:00:00"
-  _init_builtin_string_macro __ $__str_110 $__str_111
-  defstr __str_112 "__TIMESTAMP__"
-  defstr __str_113 "Jan  1 1970 00:00:00"
-  _init_builtin_string_macro __ $__str_112 $__str_113
-  defstr __str_114 "__FILE__"
-  defstr __str_115 "<unknown>"
-  _init_builtin_string_macro _FILE__ID $__str_114 $__str_115
-  defstr __str_116 "__LINE__"
-  _init_builtin_int_macro _LINE__ID $__str_116 0
-  defstr __str_117 "PNUT_SH"
-  _init_builtin_int_macro __ $__str_117 1
+  defstr __str_108 "PNUT_CC"
+  _init_builtin_int_macro __ $__str_108 1
+  defstr __str_109 "__DATE__"
+  defstr __str_110 "Jan  1 1970"
+  _init_builtin_string_macro __ $__str_109 $__str_110
+  defstr __str_111 "__TIME__"
+  defstr __str_112 "00:00:00"
+  _init_builtin_string_macro __ $__str_111 $__str_112
+  defstr __str_113 "__TIMESTAMP__"
+  defstr __str_114 "Jan  1 1970 00:00:00"
+  _init_builtin_string_macro __ $__str_113 $__str_114
+  defstr __str_115 "__FILE__"
+  defstr __str_116 "<unknown>"
+  _init_builtin_string_macro _FILE__ID $__str_115 $__str_116
+  defstr __str_117 "__LINE__"
+  _init_builtin_int_macro _LINE__ID $__str_117 0
+  defstr __str_118 "PNUT_SH"
+  _init_builtin_int_macro __ $__str_118 1
 }
 
 : $((__t1 = rest = parens_depth = arg_tokens = 0))
@@ -1399,8 +1884,8 @@ _check_macro_arity() { let macro_args_count $2; let macro $3
   _symbol_tag __t1 $macro
   _cdr expected_argc $__t1
   if [ $macro_args_count != $expected_argc ] ; then
-    defstr __str_118 "macro argument count mismatch"
-    _syntax_error __ $__str_118
+    defstr __str_119 "macro argument count mismatch"
+    _syntax_error __ $__str_119
   fi
   endlet $1 __t1 expected_argc macro macro_args_count
 }
@@ -1429,8 +1914,8 @@ _get_macro_args_toks() { let macro $2
     : $((macro_args_count += 1))
   done
   if [ $_tok != $__RPAREN__ ] ; then
-    defstr __str_119 "unterminated macro argument list"
-    _parse_error __ $__str_119 $_tok
+    defstr __str_120 "unterminated macro argument list"
+    _parse_error __ $__str_120 $_tok
   fi
   if [ $prev_is_comma != 0 ] ; then
     _cons args 0 $args
@@ -1447,8 +1932,8 @@ _get_macro_arg() { let ix $2
   arg=$_macro_args
   while [ $ix -gt 0 ]; do
     if [ $arg = 0 ] ; then
-      defstr __str_120 "get_macro_arg: argument index out of range"
-      _fatal_error __ $__str_120
+      defstr __str_121 "get_macro_arg: argument index out of range"
+      _fatal_error __ $__str_121
     fi
     _cdr arg $arg
     : $((ix -= 1))
@@ -1459,8 +1944,8 @@ _get_macro_arg() { let ix $2
 
 _return_to_parent_macro() {
   if [ $_macro_stack_ix = 0 ] ; then
-    defstr __str_121 "return_to_parent_macro: no parent macro"
-    _fatal_error __ $__str_121
+    defstr __str_122 "return_to_parent_macro: no parent macro"
+    _fatal_error __ $__str_122
   fi
   _macro_stack_ix=$((_macro_stack_ix - 3))
   _macro_tok_lst=$((_$((_macro_stack + _macro_stack_ix))))
@@ -1471,8 +1956,8 @@ _return_to_parent_macro() {
 : $((args = tokens = ident = 0))
 _begin_macro_expansion() { let ident $2; let tokens $3; let args $4
   if [ $((_macro_stack_ix + 3)) -ge 180 ] ; then
-    defstr __str_122 "Macro recursion depth exceeded."
-    _fatal_error __ $__str_122
+    defstr __str_123 "Macro recursion depth exceeded."
+    _fatal_error __ $__str_123
   fi
   : $((_$((_macro_stack + _macro_stack_ix)) = _macro_tok_lst))
   : $((_$((_macro_stack + _macro_stack_ix + 1)) = _macro_args))
@@ -1562,8 +2047,8 @@ _stringify() {
   _get_tok_macro __ 1
   _expand_macro_arg=1
   if [ $_tok != $_MACRO_ARG ] ; then
-    defstr __str_123 "expected macro argument after #"
-    _syntax_error __ $__str_123
+    defstr __str_124 "expected macro argument after #"
+    _syntax_error __ $__str_124
   fi
   _get_macro_arg arg $_val
   _car __t1 $arg
@@ -1619,8 +2104,8 @@ _paste_tokens() { let left_tok $2; let left_val $3
     elif [ $right_tok = $_INTEGER ] || [ $right_tok = $_INTEGER_HEX ] || [ $right_tok = $_INTEGER_OCT ] ; then
       _accum_symbol_integer __ $((- right_val))
     else
-      defstr __str_124 "cannot paste an identifier with a non-identifier or non-negative integer"
-      _syntax_error __ $__str_124
+      defstr __str_125 "cannot paste an identifier with a non-identifier or non-negative integer"
+      _syntax_error __ $__str_125
     fi
     _end_symbol _val
     _symbol_type _tok $_val
@@ -1635,12 +2120,12 @@ _paste_tokens() { let left_tok $2; let left_val $3
       _end_symbol _val
       _symbol_type _tok $_val
     else
-      defstr __str_125 "cannot paste an integer with a non-integer"
-      _syntax_error __ $__str_125
+      defstr __str_126 "cannot paste an integer with a non-integer"
+      _syntax_error __ $__str_126
     fi
   else
-    defstr __str_126 "cannot paste a non-identifier or non-integer"
-    _syntax_error __ $__str_126
+    defstr __str_127 "cannot paste a non-identifier or non-integer"
+    _syntax_error __ $__str_127
   fi
   endlet $1 __t1 right_val right_tok left_val left_tok
 }
@@ -1670,8 +2155,8 @@ _get_tok() {
         fi
       elif [ $_macro_tok_lst = 0 ] && [ $_paste_last_token != 0 ] ; then
         if [ $_macro_stack_ix = 0 ] ; then
-          defstr __str_127 "## cannot appear at the end of a macro expansion"
-          _syntax_error __ $__str_127
+          defstr __str_128 "## cannot appear at the end of a macro expansion"
+          _syntax_error __ $__str_128
         fi
         _return_to_parent_macro __
         _paste_last_token=0
@@ -1725,10 +2210,13 @@ _get_tok() {
       break
     elif [ $__0__ -le $_ch ] && [ $_ch -le $__9__ ] ; then
       _val=0
+      _fl_lex_begin __
+      _fl_rec=1
       _tok=$_INTEGER
       if [ $_ch = $__0__ ] ; then
         _get_ch __
         if [ $_ch = $__x__ ] || [ $_ch = $__X__ ] ; then
+          _fl_rec=0
           _tok=$_INTEGER_HEX
           _get_ch __
           if _accum_digit __t1 16; [ $__t1 != 0 ] ; then
@@ -1736,8 +2224,8 @@ _get_tok() {
               :
             done
           else
-            defstr __str_128 "invalid hex integer -- it must have at least one digit"
-            _syntax_error __ $__str_128
+            defstr __str_129 "invalid hex integer -- it must have at least one digit"
+            _syntax_error __ $__str_129
           fi
         else
           while _accum_digit __t1 8; [ $__t1 != 0 ]; do
@@ -1750,13 +2238,27 @@ _get_tok() {
           :
         done
       fi
+      if [ $_fl_rec != 0 ] && { [ $_ch = $__PERIOD__ ] || [ $_ch = $__e__ ] || [ $_ch = $__E__ ]; } ; then
+        _fl_rec=0
+        if [ $_ch = $__PERIOD__ ] ; then
+          _get_ch __
+        fi
+        _tok=$_DOUBLE_LIT
+        _fl_lex_rest _val
+        break
+      fi
+      _fl_rec=0
+      if [ $_fl_ovf != 0 ] ; then
+        defstr __str_14 "literal integer overflow"
+        _syntax_error __ $__str_14
+      fi
       break
     elif [ $_ch = $__QUOTE__ ] ; then
       _get_ch __
       _get_string_char __
       if [ $_ch != $__QUOTE__ ] ; then
-        defstr __str_129 "unterminated character literal"
-        _syntax_error __ $__str_129
+        defstr __str_130 "unterminated character literal"
+        _syntax_error __ $__str_130
       fi
       _get_ch __
       _tok=$_CHARACTER
@@ -1780,8 +2282,8 @@ _get_tok() {
             _get_ch __
           done
           if [ $_ch = -1 ] ; then
-            defstr __str_130 "unterminated comment"
-            _syntax_error __ $__str_130
+            defstr __str_131 "unterminated comment"
+            _syntax_error __ $__str_131
           fi
           _get_ch __
         elif [ $_ch = $__SLASH__ ] ; then
@@ -1910,14 +2412,20 @@ _get_tok() {
         break
       elif [ $_ch = $__PERIOD__ ] ; then
         _get_ch __
+        if [ $__0__ -le $_ch ] && [ $_ch -le $__9__ ] ; then
+          _fl_lex_begin __
+          _tok=$_DOUBLE_LIT
+          _fl_lex_rest _val
+          break
+        fi
         if [ $_ch = $__PERIOD__ ] ; then
           _get_ch __
           if [ $_ch = $__PERIOD__ ] ; then
             _get_ch __
             _tok=$_ELLIPSIS
           else
-            defstr __str_131 "invalid token"
-            _syntax_error __ $__str_131
+            defstr __str_132 "invalid token"
+            _syntax_error __ $__str_132
           fi
         fi
         break
@@ -1929,12 +2437,12 @@ _get_tok() {
         if [ $_ch = $__LF__ ] ; then
           _get_ch __
         else
-          defstr __str_132 "unexpected character after backslash"
-          _syntax_error __ $__str_132
+          defstr __str_133 "unexpected character after backslash"
+          _syntax_error __ $__str_133
         fi
       else
-        defstr __str_131 "invalid token"
-        _syntax_error __ $__str_131
+        defstr __str_132 "invalid token"
+        _syntax_error __ $__str_132
       fi
     fi
   done
@@ -2346,8 +2854,8 @@ _print_tok_type() { let tok $2
     printf "tok="
     printf "%d" $tok
     printf "\n"
-    defstr __str_133 "print_tok_type: unknown token"
-    _fatal_error __ $__str_133
+    defstr __str_134 "print_tok_type: unknown token"
+    _fatal_error __ $__str_134
   fi
   endlet $1 tok
 }
@@ -2360,8 +2868,8 @@ _expect_tok() { let expected_tok $2
     printf "\ncurrent tok="
     _print_tok_type __ $_tok
     printf "\n"
-    defstr __str_134 "unexpected token"
-    _parse_error __ $__str_134 $_tok
+    defstr __str_135 "unexpected token"
+    _parse_error __ $__str_135 $_tok
   fi
   _get_tok __
   endlet $1 expected_tok
@@ -2441,8 +2949,8 @@ _parse_enum() {
     _get_tok __
     while [ $_tok != $__RBRACE__ ]; do
       if [ $_tok != $_IDENTIFIER ] ; then
-        defstr __str_135 "identifier expected"
-        _parse_error __ $__str_135 $_tok
+        defstr __str_136 "identifier expected"
+        _parse_error __ $__str_136 $_tok
       fi
       _new_ast0 ident $_IDENTIFIER $_val
       _get_tok __
@@ -2450,8 +2958,8 @@ _parse_enum() {
         _get_tok __
         _parse_constant_expression value
         if [ $value = 0 ] ; then
-          defstr __str_136 "Enum value must be a constant expression"
-          _parse_error __ $__str_136 $_tok
+          defstr __str_137 "Enum value must be a constant expression"
+          _parse_error __ $__str_137 $_tok
         fi
         _get_op op $value
         if [ $op != $_INTEGER ] && [ $op != $_INTEGER_HEX ] && [ $op != $_INTEGER_OCT ] ; then
@@ -2503,18 +3011,18 @@ _parse_struct_or_union() { let struct_or_union_tok $2
     _get_tok __
     while [ $_tok != $__RBRACE__ ]; do
       if _is_type_starter __t1 $_tok; [ $((!__t1)) != 0 ] ; then
-        defstr __str_137 "type expected in struct declaration"
-        _parse_error __ $__str_137 $_tok
+        defstr __str_138 "type expected in struct declaration"
+        _parse_error __ $__str_138 $_tok
       fi
       if [ $ends_in_flex_array != 0 ] ; then
-        defstr __str_138 "flexible array member must be last"
-        _parse_error __ $__str_138 $_tok
+        defstr __str_139 "flexible array member must be last"
+        _parse_error __ $__str_139 $_tok
       fi
       _parse_declaration_specifiers type_specifier 0
       if [ $_tok = $__SEMICOLON__ ] ; then
         if { _get_op __t1 $type_specifier; [ $__t1 != $_ENUM_KW ]; } && { _get_op __t1 $type_specifier; [ $__t1 != $_STRUCT_KW ]; } && { _get_op __t1 $type_specifier; [ $__t1 != $_UNION_KW ]; } ; then
-          defstr __str_139 "Anonymous struct/union member must be a struct or union type"
-          _parse_error __ $__str_139 $_tok
+          defstr __str_140 "Anonymous struct/union member must be a struct or union type"
+          _parse_error __ $__str_140 $_tok
         fi
         _new_ast3 decl $_DECL 0 $type_specifier 0
         if [ $result = 0 ] ; then
@@ -2537,8 +3045,8 @@ _parse_struct_or_union() { let struct_or_union_tok $2
             _get_child rest $rest 1
           fi
           if _get_child __t1 $decl 1; [ $__t1 = $_VOID_KW ] ; then
-            defstr __str_140 "member with void type not allowed in struct/union"
-            _parse_error __ $__str_140 $_tok
+            defstr __str_141 "member with void type not allowed in struct/union"
+            _parse_error __ $__str_141 $_tok
           fi
           if { _get_child __t1 $decl 1; [ $__t1 = $__LBRACK__ ]; } && { _get_child __t1 $decl 1; _get_child __t1 $__t1 1; [ $__t1 = 0 ]; } ; then
             ends_in_flex_array=1
@@ -2563,7 +3071,7 @@ _parse_struct_or_union() { let struct_or_union_tok $2
 _parse_type_specifier() {
   let type_specifier
   type_specifier=0
-  if [ $_tok = $_CHAR_KW ] || [ $_tok = $_INT_KW ] || [ $_tok = $_VOID_KW ] ; then
+  if [ $_tok = $_CHAR_KW ] || [ $_tok = $_INT_KW ] || [ $_tok = $_VOID_KW ] || [ $_tok = $_FLOAT_KW ] || [ $_tok = $_DOUBLE_KW ] ; then
     _new_ast0 type_specifier $_tok 0
     _get_tok __
     : $(($1 = type_specifier))
@@ -2582,17 +3090,22 @@ _parse_type_specifier() {
     : $(($1 = type_specifier))
   elif [ $_tok = $_LONG_KW ] ; then
     _get_tok __
-    if [ $_tok = $_LONG_KW ] ; then
+    if [ $_tok = $_DOUBLE_KW ] ; then
       _get_tok __
-      if [ $_tok = $_INT_KW ] ; then
-        _get_tok __
-      fi
-      _new_ast0 $1 $_LONG_KW 0
-    elif [ $_tok = $_INT_KW ] ; then
-      _get_tok __
-      _new_ast0 $1 $_INT_KW 0
+      _new_ast0 $1 $_DOUBLE_KW 0
     else
-      _new_ast0 $1 $_INT_KW 0
+      if [ $_tok = $_LONG_KW ] ; then
+        _get_tok __
+        if [ $_tok = $_INT_KW ] ; then
+          _get_tok __
+        fi
+        _new_ast0 $1 $_LONG_KW 0
+      elif [ $_tok = $_INT_KW ] ; then
+        _get_tok __
+        _new_ast0 $1 $_INT_KW 0
+      else
+        _new_ast0 $1 $_INT_KW 0
+      fi
     fi
   else
     : $(($1 = 0))
@@ -2611,22 +3124,22 @@ _parse_declaration_specifiers() { let allow_typedef $2
   while [ $loop != 0 ]; do
     if [ $_tok = $_CHAR_KW ] || [ $_tok = $_INT_KW ] || [ $_tok = $_VOID_KW ] || [ $_tok = $_SHORT_KW ] || [ $_tok = $_SIGNED_KW ] || [ $_tok = $_UNSIGNED_KW ] || [ $_tok = $_LONG_KW ] || [ $_tok = $_FLOAT_KW ] || [ $_tok = $_DOUBLE_KW ] ; then
       if [ $type_specifier != 0 ] ; then
-        defstr __str_141 "Unexpected C type specifier"
-        _parse_error __ $__str_141 $_tok
+        defstr __str_142 "Unexpected C type specifier"
+        _parse_error __ $__str_142 $_tok
       fi
       _parse_type_specifier type_specifier
       if [ $type_specifier = 0 ] ; then
-        defstr __str_142 "Failed to parse type specifier"
-        _parse_error __ $__str_142 $_tok
+        defstr __str_143 "Failed to parse type specifier"
+        _parse_error __ $__str_143 $_tok
       fi
     elif [ $_tok = $_AUTO_KW ] || [ $_tok = $_REGISTER_KW ] || [ $_tok = $_STATIC_KW ] || [ $_tok = $_EXTERN_KW ] || [ $_tok = $_TYPEDEF_KW ] ; then
       if [ $specifier_storage_class != 0 ] ; then
-        defstr __str_143 "Multiple storage classes not supported"
-        _parse_error __ $__str_143 $_tok
+        defstr __str_144 "Multiple storage classes not supported"
+        _parse_error __ $__str_144 $_tok
       fi
       if [ $_tok = $_TYPEDEF_KW ] && [ $((! allow_typedef)) != 0 ] ; then
-        defstr __str_144 "Unexpected typedef"
-        _parse_error __ $__str_144 $_tok
+        defstr __str_145 "Unexpected typedef"
+        _parse_error __ $__str_145 $_tok
       fi
       specifier_storage_class=$_tok
       _get_tok __
@@ -2637,20 +3150,20 @@ _parse_declaration_specifiers() { let allow_typedef $2
       _get_tok __
     elif [ $_tok = $_STRUCT_KW ] || [ $_tok = $_UNION_KW ] ; then
       if [ $type_specifier != 0 ] ; then
-        defstr __str_145 "Multiple types not supported"
-        _parse_error __ $__str_145 $_tok
+        defstr __str_146 "Multiple types not supported"
+        _parse_error __ $__str_146 $_tok
       fi
       _parse_struct_or_union type_specifier $_tok
     elif [ $_tok = $_ENUM_KW ] ; then
       if [ $type_specifier != 0 ] ; then
-        defstr __str_145 "Multiple types not supported"
-        _parse_error __ $__str_145 $_tok
+        defstr __str_146 "Multiple types not supported"
+        _parse_error __ $__str_146 $_tok
       fi
       _parse_enum type_specifier
     elif [ $_tok = $_TYPE ] ; then
       if [ $type_specifier != 0 ] ; then
-        defstr __str_145 "Multiple types not supported"
-        _parse_error __ $__str_145 $_tok
+        defstr __str_146 "Multiple types not supported"
+        _parse_error __ $__str_146 $_tok
       fi
       _symbol_tag type_specifier $_val
       _get_tok __
@@ -2659,13 +3172,13 @@ _parse_declaration_specifiers() { let allow_typedef $2
     fi
   done
   if [ $type_specifier = 0 ] ; then
-    defstr __str_146 "Type expected"
-    _parse_error __ $__str_146 $_tok
+    defstr __str_147 "Type expected"
+    _parse_error __ $__str_147 $_tok
   fi
   if [ $type_qualifier != 0 ] ; then
     if { _get_op __t1 $type_specifier; [ $__t1 = $__LBRACK__ ]; } || { _get_op __t1 $type_specifier; [ $__t1 = $__LPAREN__ ]; } ; then
-      defstr __str_147 "Type qualifiers not allowed on typedef'ed array or function type"
-      _parse_error __ $__str_147 $_tok
+      defstr __str_148 "Type qualifiers not allowed on typedef'ed array or function type"
+      _parse_error __ $__str_148 $_tok
     fi
     _get_child __t1 $type_specifier 0
     _set_child __ $type_specifier 0 $((__t1 | type_qualifier))
@@ -2688,8 +3201,8 @@ _parse_param_list() {
       _parse_declarator decl 1 $__t1
       if _get_child __t1 $decl 1; _get_op __t1 $__t1; [ $__t1 = $_VOID_KW ] ; then
         if [ $_tok != $__RPAREN__ ] || [ $result != 0 ] ; then
-          defstr __str_148 "void must be the only parameter"
-          _parse_error __ $__str_148 $_tok
+          defstr __str_149 "void must be the only parameter"
+          _parse_error __ $__str_149 $_tok
         fi
         break
       fi
@@ -2700,15 +3213,15 @@ _parse_param_list() {
       _get_tok __
     elif [ $_tok = $_ELLIPSIS ] ; then
       if [ $result = 0 ] ; then
-        defstr __str_149 "Function must have a named parameter before ellipsis parameter"
-        _parse_error __ $__str_149 $_tok
+        defstr __str_150 "Function must have a named parameter before ellipsis parameter"
+        _parse_error __ $__str_150 $_tok
       fi
       _get_tok __
       _parse_param_list_is_variadic=1
       break
     else
-      defstr __str_150 "Parameter declaration expected"
-      _parse_error __ $__str_150 $_tok
+      defstr __str_151 "Parameter declaration expected"
+      _parse_error __ $__str_151 $_tok
     fi
     if [ $_tok = $__COMMA__ ] ; then
       _get_tok __
@@ -2736,8 +3249,8 @@ _get_inner_type() { let type $2
   elif [ $op = $__LBRACK__ ] || [ $op = $__LPAREN__ ] ; then
     _get_child $1 $type 0
   else
-    defstr __str_151 "Invalid type"
-    _fatal_error __ $__str_151
+    defstr __str_152 "Invalid type"
+    _fatal_error __ $__str_152
     : $(($1 = 0))
   fi
   endlet $1 op type
@@ -2783,8 +3296,8 @@ _parse_declarator() { let abstract_decl $2; let parent_type $3
       _new_ast3 result $_DECL 0 $parent_type 0
       parent_type_parent=$result
     else
-      defstr __str_152 "Invalid declarator, expected an identifier but declarator doesn't have one"
-      _parse_error __ $__str_152 $_tok
+      defstr __str_153 "Invalid declarator, expected an identifier but declarator doesn't have one"
+      _parse_error __ $__str_153 $_tok
     fi
   fi
   decl=$result
@@ -2792,8 +3305,8 @@ _parse_declarator() { let abstract_decl $2; let parent_type $3
   while [ $first_tok != $__STAR__ ]; do
     if [ $_tok = $__LBRACK__ ] ; then
       if _get_op __t1 $result; [ $__t1 = $_VOID_KW ] ; then
-        defstr __str_153 "void array not allowed"
-        _parse_error __ $__str_153 $_tok
+        defstr __str_154 "void array not allowed"
+        _parse_error __ $__str_154 $_tok
       fi
       _get_tok __
       if [ $_tok = $__RBRACK__ ] ; then
@@ -2801,8 +3314,8 @@ _parse_declarator() { let abstract_decl $2; let parent_type $3
       else
         _parse_constant_expression arr_size_expr
         if [ $arr_size_expr = 0 ] ; then
-          defstr __str_154 "Array size must be an integer constant"
-          _parse_error __ $__str_154 $_tok
+          defstr __str_155 "Array size must be an integer constant"
+          _parse_error __ $__str_155 $_tok
         fi
         _compute_constant _val $arr_size_expr 0
       fi
@@ -2837,8 +3350,8 @@ _parse_initializer_list() {
   _expect_tok __ $__LBRACE__
   while [ $_tok != $__RBRACE__ ] && [ $_tok != -1 ]; do
     if [ $_tok = $__LBRACE__ ] ; then
-      defstr __str_155 "nested initializer lists not supported"
-      _syntax_error __ $__str_155
+      defstr __str_156 "nested initializer lists not supported"
+      _syntax_error __ $__str_156
     fi
     if [ $result = 0 ] ; then
       _parse_initializer __t1
@@ -2897,8 +3410,8 @@ _parse_declarators() { let is_for_typedef $2; let type_specifier $3; let first_d
       _set_child __ $rest 1 $__t1
       _get_child rest $rest 1
     else
-      defstr __str_156 "';' or ',' expected"
-      _parse_error __ $__str_156 $_tok
+      defstr __str_157 "';' or ',' expected"
+      _parse_error __ $__str_157 $_tok
     fi
   done
   : $(($1 = declarators))
@@ -2913,8 +3426,8 @@ _add_typedef() { let declarator $2
   _get_child decl_type $declarator 1
   if { _get_op __t1 $decl_type; [ $__t1 = $_STRUCT_KW ]; } || { _get_op __t1 $decl_type; [ $__t1 = $_UNION_KW ]; } || { _get_op __t1 $decl_type; [ $__t1 = $_ENUM_KW ]; } ; then
     if { _get_child __t1 $decl_type 1; [ $__t1 != 0 ]; } && { _get_child __t1 $decl_type 1; _get_val __t1 $__t1; [ $__t1 != $decl_ident ]; } ; then
-      defstr __str_157 "typedef name must match struct/union/enum name"
-      _syntax_error __ $__str_157
+      defstr __str_158 "typedef name must match struct/union/enum name"
+      _syntax_error __ $__str_158
     fi
     _new_ast0 __t1 $_IDENTIFIER $decl_ident
     _set_child __ $decl_type 1 $__t1
@@ -2931,14 +3444,14 @@ _parse_fun_def() { let declarator $2
   _get_child params $fun_type 1
   while [ $params != 0 ]; do
     if _get_child __t1 $params 0; _get_child __t1 $__t1 0; [ $__t1 = 0 ] ; then
-      defstr __str_158 "Parameter name expected"
-      _parse_error __ $__str_158 $_tok
+      defstr __str_159 "Parameter name expected"
+      _parse_error __ $__str_159 $_tok
     fi
     _get_child params $params 1
   done
   if _get_child __t1 $declarator 2; [ $__t1 != 0 ] ; then
-    defstr __str_159 "Initializer not allowed in function definition"
-    _parse_error __ $__str_159 $_tok
+    defstr __str_160 "Initializer not allowed in function definition"
+    _parse_error __ $__str_160 $_tok
   fi
   _parse_compound_statement __t1
   _new_ast2 $1 $_FUN_DECL $declarator $__t1
@@ -2951,8 +3464,8 @@ _parse_declaration() { let local $2
   _parse_declaration_specifiers type_specifier 1
   if [ $_tok = $__SEMICOLON__ ] ; then
     if { _get_op __t1 $type_specifier; [ $__t1 != $_ENUM_KW ]; } && { _get_op __t1 $type_specifier; [ $__t1 != $_STRUCT_KW ]; } && { _get_op __t1 $type_specifier; [ $__t1 != $_UNION_KW ]; } ; then
-      defstr __str_160 "enum/struct/union declaration expected"
-      _parse_error __ $__str_160 $_tok
+      defstr __str_161 "enum/struct/union declaration expected"
+      _parse_error __ $__str_161 $_tok
     fi
     if [ $_glo_specifier_storage_class = $_TYPEDEF_KW ] ; then
       _new_ast3 __t1 $_DECL 0 $type_specifier 0
@@ -2973,8 +3486,8 @@ _parse_declaration() { let local $2
     _parse_declarator_and_initializer declarator 0 $type_specifier
     if { _get_child __t1 $declarator 1; _get_op __t1 $__t1; [ $__t1 = $__LPAREN__ ]; } && [ $_tok = $__LBRACE__ ] ; then
       if [ $local != 0 ] ; then
-        defstr __str_161 "Function definition not allowed in local scope"
-        _parse_error __ $__str_161 $_tok
+        defstr __str_162 "Function definition not allowed in local scope"
+        _parse_error __ $__str_162 $_tok
       fi
       _parse_fun_def $1 $declarator
       endlet $1 __t1 type_specifier declarators declarator result local
@@ -3004,7 +3517,7 @@ _parse_parenthesized_expression() { let first_par_already_consumed $2
 _parse_primary_expression() {
   let result; let rest; let __t1
   result=0
-  if [ $_tok = $_IDENTIFIER ] || [ $_tok = $_CHARACTER ] || [ $_tok = $_INTEGER ] || [ $_tok = $_INTEGER_HEX ] || [ $_tok = $_INTEGER_OCT ] ; then
+  if [ $_tok = $_IDENTIFIER ] || [ $_tok = $_CHARACTER ] || [ $_tok = $_INTEGER ] || [ $_tok = $_DOUBLE_LIT ] || [ $_tok = $_INTEGER_HEX ] || [ $_tok = $_INTEGER_OCT ] ; then
     _new_ast0 result $_tok $_val
     _get_tok __
   elif [ $_tok = $_STRING ] ; then
@@ -3032,8 +3545,8 @@ _parse_primary_expression() {
   elif [ $_tok = $__LPAREN__ ] ; then
     _parse_parenthesized_expression result 0
   else
-    defstr __str_162 "identifier, literal, or '(' expected"
-    _parse_error __ $__str_162 $_tok
+    defstr __str_163 "identifier, literal, or '(' expected"
+    _parse_error __ $__str_163 $_tok
   fi
   : $(($1 = result))
   endlet $1 __t1 rest result
@@ -3063,8 +3576,8 @@ _parse_postfix_expression() { let result $2
     elif [ $_tok = $__PERIOD__ ] ; then
       _get_tok __
       if [ $_tok != $_IDENTIFIER ] ; then
-        defstr __str_135 "identifier expected"
-        _parse_error __ $__str_135 $_tok
+        defstr __str_136 "identifier expected"
+        _parse_error __ $__str_136 $_tok
       fi
       _new_ast0 __t1 $_IDENTIFIER $_val
       _new_ast2 result $__PERIOD__ $result $__t1
@@ -3072,8 +3585,8 @@ _parse_postfix_expression() { let result $2
     elif [ $_tok = $_ARROW ] ; then
       _get_tok __
       if [ $_tok != $_IDENTIFIER ] ; then
-        defstr __str_135 "identifier expected"
-        _parse_error __ $__str_135 $_tok
+        defstr __str_136 "identifier expected"
+        _parse_error __ $__str_136 $_tok
       fi
       _new_ast0 __t1 $_IDENTIFIER $_val
       _new_ast2 result $_ARROW $result $__t1
@@ -3137,8 +3650,8 @@ _parse_unary_expression() {
       _new_ast2 result $__LPAREN__ $__t1 $_tok
       _get_tok_macro __ 1
     else
-      defstr __str_163 "identifier or '(' expected"
-      _parse_error __ $__str_163 $_tok
+      defstr __str_164 "identifier or '(' expected"
+      _parse_error __ $__str_164 $_tok
       : $(($1 = 0))
       endlet $1 __t1 op result
       return
@@ -3817,6 +4330,7 @@ _runtime_getchar() {
   printf "      __stdin_line_ending=0                  # Reset line ending for next getchar call\n"
   printf "      return\n"
   printf "    fi\n"
+  printf "    if [ \"\${__ba_raw_fd--1}\" = 0 ]; then __ba_rawbyte \$1 0; return; fi\n"
   printf "    __stdin_end=0\n"
   printf "    IFS=                                            # don't split input\n"
   printf "    if read -r __stdin_buf ; then                   # read next line into \$__stdin_buf\n"
@@ -4161,6 +4675,7 @@ _runtime_read_byte() {
   printf "  # The cursor is at the end of the buffer, we need to read the next line\n"
   printf "  if [ \$((_\$((__buffer + __cursor)))) -eq 0 ]; then\n"
   printf "    # Buffer has been read completely, read next line\n"
+  printf "    if [ \"\${__ba_raw_fd--1}\" = \$__fd ]; then __ba_rawbyte \$1 \$__fd; return; fi\n"
   printf "    refill_buffer \$__fd\n"
   printf "    __cursor=0 # Reset cursor and reload buffer\n"
   printf "    : \$((__buffer=__buffer_fd\$__fd))\n"
@@ -4204,6 +4719,7 @@ _runtime_write() {
   fi
   _runtime_open __
   printf "_write() { : \$((__fd = \$2)) \$((__buf = \$3)) \$((__count = \$4))\n"
+  printf "  if [ -n \"\${__ba_net-}\" ]; then eval \"__fd=\\\\\${__ba_wfd\$__fd-\$__fd}\"; fi\n"
   printf "  : \$((__i = 0))\n"
   printf "  while [ \$__i -lt \$__count ] ; do\n"
   printf "    : \$((__byte = _\$((__buf+__i))))\n"
@@ -4225,6 +4741,7 @@ _runtime_close() {
   _runtime_free __
   printf "_close() { # \$2: fd\n"
   printf "  __fd=\$2\n"
+  printf "  if [ -n \"\${__ba_net-}\" ]; then __ba_net_close \$__fd; __fd=\$2; fi\n"
   printf "  __buf=\$((__buffer_fd\$__fd))  # Get buffer\n"
   printf "  _free __ \$__buf              # Release buffer\n"
   printf "  : \$((__state_fd\$__fd = -1))  # Mark the fd as closed\n"
@@ -4362,8 +4879,8 @@ readonly _TEXT_STRING=4
 readonly _TEXT_ESCAPED=5
 _wrap_int() { # i: $2
   if [ $((_text_alloc + 2)) -ge 1000000 ] ; then
-    defstr __str_164 "string tree pool overflow"
-    _fatal_error __ $__str_164
+    defstr __str_165 "string tree pool overflow"
+    _fatal_error __ $__str_165
   fi
   : $((_$((_text_pool + _text_alloc)) = _TEXT_INTEGER))
   : $((_$((_text_pool + _text_alloc + 1)) = $2))
@@ -4372,8 +4889,8 @@ _wrap_int() { # i: $2
 
 _wrap_int_hex() { # i: $2
   if [ $((_text_alloc + 2)) -ge 1000000 ] ; then
-    defstr __str_164 "string tree pool overflow"
-    _fatal_error __ $__str_164
+    defstr __str_165 "string tree pool overflow"
+    _fatal_error __ $__str_165
   fi
   : $((_$((_text_pool + _text_alloc)) = _TEXT_INTEGER_HEX))
   : $((_$((_text_pool + _text_alloc + 1)) = $2))
@@ -4382,8 +4899,8 @@ _wrap_int_hex() { # i: $2
 
 _wrap_int_oct() { # i: $2
   if [ $((_text_alloc + 2)) -ge 1000000 ] ; then
-    defstr __str_164 "string tree pool overflow"
-    _fatal_error __ $__str_164
+    defstr __str_165 "string tree pool overflow"
+    _fatal_error __ $__str_165
   fi
   : $((_$((_text_pool + _text_alloc)) = _TEXT_INTEGER_OCT))
   : $((_$((_text_pool + _text_alloc + 1)) = $2))
@@ -4404,8 +4921,8 @@ _wrap_integer() { # multiply: $2, obj: $3
     _get_val __t1 $3
     _wrap_int_oct $1 $(($2 * -__t1))
   else
-    defstr __str_165 "wrap_integer: unknown integer type"
-    _fatal_error __ $__str_165
+    defstr __str_166 "wrap_integer: unknown integer type"
+    _fatal_error __ $__str_166
     : $(($1 = 0))
   fi
   endlet $1 __t1 op
@@ -4413,8 +4930,8 @@ _wrap_integer() { # multiply: $2, obj: $3
 
 _escape_text() { # t: $2, for_printf: $3
   if [ $((_text_alloc + 3)) -ge 1000000 ] ; then
-    defstr __str_164 "string tree pool overflow"
-    _fatal_error __ $__str_164
+    defstr __str_165 "string tree pool overflow"
+    _fatal_error __ $__str_165
   fi
   : $((_$((_text_pool + _text_alloc)) = _TEXT_ESCAPED))
   : $((_$((_text_pool + _text_alloc + 1)) = $2))
@@ -4424,8 +4941,8 @@ _escape_text() { # t: $2, for_printf: $3
 
 _string_concat() { # t1: $2, t2: $3
   if [ $((_text_alloc + 4)) -ge 1000000 ] ; then
-    defstr __str_164 "string tree pool overflow"
-    _fatal_error __ $__str_164
+    defstr __str_165 "string tree pool overflow"
+    _fatal_error __ $__str_165
   fi
   : $((_$((_text_pool + _text_alloc)) = _TEXT_TREE))
   : $((_$((_text_pool + _text_alloc + 1)) = 2))
@@ -4436,8 +4953,8 @@ _string_concat() { # t1: $2, t2: $3
 
 _string_concat3() { # t1: $2, t2: $3, t3: $4
   if [ $((_text_alloc + 5)) -ge 1000000 ] ; then
-    defstr __str_164 "string tree pool overflow"
-    _fatal_error __ $__str_164
+    defstr __str_165 "string tree pool overflow"
+    _fatal_error __ $__str_165
   fi
   : $((_$((_text_pool + _text_alloc)) = _TEXT_TREE))
   : $((_$((_text_pool + _text_alloc + 1)) = 3))
@@ -4449,8 +4966,8 @@ _string_concat3() { # t1: $2, t2: $3, t3: $4
 
 _string_concat4() { # t1: $2, t2: $3, t3: $4, t4: $5
   if [ $((_text_alloc + 6)) -ge 1000000 ] ; then
-    defstr __str_164 "string tree pool overflow"
-    _fatal_error __ $__str_164
+    defstr __str_165 "string tree pool overflow"
+    _fatal_error __ $__str_165
   fi
   : $((_$((_text_pool + _text_alloc)) = _TEXT_TREE))
   : $((_$((_text_pool + _text_alloc + 1)) = 4))
@@ -4463,8 +4980,8 @@ _string_concat4() { # t1: $2, t2: $3, t3: $4, t4: $5
 
 _string_concat5() { # t1: $2, t2: $3, t3: $4, t4: $5, t5: $6
   if [ $((_text_alloc + 7)) -ge 1000000 ] ; then
-    defstr __str_164 "string tree pool overflow"
-    _fatal_error __ $__str_164
+    defstr __str_165 "string tree pool overflow"
+    _fatal_error __ $__str_165
   fi
   : $((_$((_text_pool + _text_alloc)) = _TEXT_TREE))
   : $((_$((_text_pool + _text_alloc + 1)) = 5))
@@ -4478,8 +4995,8 @@ _string_concat5() { # t1: $2, t2: $3, t3: $4, t4: $5, t5: $6
 
 _wrap_str_imm() { # s: $2, end: $3
   if [ $((_text_alloc + 3)) -ge 1000000 ] ; then
-    defstr __str_164 "string tree pool overflow"
-    _fatal_error __ $__str_164
+    defstr __str_165 "string tree pool overflow"
+    _fatal_error __ $__str_165
   fi
   : $((_$((_text_pool + _text_alloc)) = _TEXT_STRING))
   : $((_$((_text_pool + _text_alloc + 1)) = $2))
@@ -4605,11 +5122,11 @@ _print_escaped_text() { let t $2; let for_printf $3
   elif [ $((_$((_text_pool + t)))) = $_TEXT_STRING ] ; then
     _print_escaped_string __ $((_$((_text_pool + t + 1)))) $((_$((_text_pool + t + 2)))) $for_printf
   elif [ $((_$((_text_pool + t)))) = $_TEXT_ESCAPED ] ; then
-    defstr __str_166 "Cannot escape a string that is already escaped"
-    _fatal_error __ $__str_166
-  else
-    defstr __str_167 "print_escaped_text: unexpected string tree node"
+    defstr __str_167 "Cannot escape a string that is already escaped"
     _fatal_error __ $__str_167
+  else
+    defstr __str_168 "print_escaped_text: unexpected string tree node"
+    _fatal_error __ $__str_168
   fi
   endlet $1 i for_printf t
 }
@@ -4652,10 +5169,1530 @@ _print_text() { let t $2
   elif [ $((_$((_text_pool + t)))) = $_TEXT_ESCAPED ] ; then
     _print_escaped_text __ $((_$((_text_pool + t + 1)))) $((_$((_text_pool + t + 2))))
   else
-    defstr __str_168 "print_text: unexpected string tree node"
-    _fatal_error __ $__str_168
+    defstr __str_169 "print_text: unexpected string tree node"
+    _fatal_error __ $__str_169
   fi
   endlet $1 s i t
+}
+
+_fl_ty=0
+_fl_ret_ty=0
+_fl_t_int=0
+_fl_t_double=0
+_fl_t_charp=0
+_fl_initialized=0
+_FL_DADD_ID=0
+_FL_DSUB_ID=0
+_FL_DMUL_ID=0
+_FL_DDIV_ID=0
+_FL_DNEG_ID=0
+_FL_DLT_ID=0
+_FL_DLE_ID=0
+_FL_DEQ_ID=0
+_FL_DTRUE_ID=0
+_FL_ITOD_ID=0
+_FL_DTOI_ID=0
+_FL_DFMT_ID=0
+_FL_BITS_ID=0
+_FL_FROM_BITS_ID=0
+_FL_SEL_ID=0
+defarr _fl_g_key 8192
+defarr _fl_g_val 8192
+_fl_g_count=0
+defarr _fl_l_key 1000
+defarr _fl_l_val 1000
+_fl_nl=0
+: $((__t1 = 0))
+_fl_init() {
+  let __t1
+  _fl_initialized=1
+  _new_ast0 _fl_t_int $_INT_KW 0
+  _new_ast0 _fl_t_double $_DOUBLE_KW 0
+  _new_ast0 __t1 $_CHAR_KW 0
+  _new_ast2 _fl_t_charp $__STAR__ 0 $__t1
+  defstr __str_170 "ba_dadd"
+  _init_ident _FL_DADD_ID $_IDENTIFIER $__str_170
+  defstr __str_171 "ba_dsub"
+  _init_ident _FL_DSUB_ID $_IDENTIFIER $__str_171
+  defstr __str_172 "ba_dmul"
+  _init_ident _FL_DMUL_ID $_IDENTIFIER $__str_172
+  defstr __str_173 "ba_ddiv"
+  _init_ident _FL_DDIV_ID $_IDENTIFIER $__str_173
+  defstr __str_174 "ba_dneg"
+  _init_ident _FL_DNEG_ID $_IDENTIFIER $__str_174
+  defstr __str_175 "ba_dlt"
+  _init_ident _FL_DLT_ID $_IDENTIFIER $__str_175
+  defstr __str_176 "ba_dle"
+  _init_ident _FL_DLE_ID $_IDENTIFIER $__str_176
+  defstr __str_177 "ba_deq"
+  _init_ident _FL_DEQ_ID $_IDENTIFIER $__str_177
+  defstr __str_178 "ba_dtrue"
+  _init_ident _FL_DTRUE_ID $_IDENTIFIER $__str_178
+  defstr __str_179 "ba_itod"
+  _init_ident _FL_ITOD_ID $_IDENTIFIER $__str_179
+  defstr __str_180 "ba_dtoi"
+  _init_ident _FL_DTOI_ID $_IDENTIFIER $__str_180
+  defstr __str_181 "ba_dfmt"
+  _init_ident _FL_DFMT_ID $_IDENTIFIER $__str_181
+  defstr __str_182 "ba_sel"
+  _init_ident _FL_SEL_ID $_IDENTIFIER $__str_182
+  defstr __str_183 "ba_bits"
+  _init_ident _FL_BITS_ID $_IDENTIFIER $__str_183
+  defstr __str_184 "ba_from_bits"
+  _init_ident _FL_FROM_BITS_ID $_IDENTIFIER $__str_184
+  endlet $1 __t1
+}
+
+: $((h = key = 0))
+_fl_hash_slot() { let key $2
+  let h
+  h=$key
+  if [ $h -lt 0 ] ; then
+    h=$((- h))
+  fi
+  h=$((h % 8192))
+  while [ $((_$((_fl_g_key + h)))) != 0 ] && [ $((_$((_fl_g_key + h)))) != $key ]; do
+    h=$(((h + 1) % 8192))
+  done
+  : $(($1 = h))
+  endlet $1 h key
+}
+
+: $((h = val = key = 0))
+_fl_g_put() { let key $2; let val $3
+  let h
+  _fl_hash_slot h $key
+  if [ $((_$((_fl_g_key + h)))) = 0 ] ; then
+    : $((_fl_g_count += 1))
+    if [ $_fl_g_count -ge $((8192 - 1)) ] ; then
+      defstr __str_185 "too many global declarations"
+      _fatal_error __ $__str_185
+    fi
+  fi
+  : $((_$((_fl_g_key + h)) = key))
+  : $((_$((_fl_g_val + h)) = val))
+  endlet $1 h val key
+}
+
+: $((h = key = 0))
+_fl_g_get() { let key $2
+  let h
+  _fl_hash_slot h $key
+  if [ $((_$((_fl_g_key + h)))) = 0 ] ; then
+    : $(($1 = 0))
+    endlet $1 h key
+    return
+  fi
+  : $(($1 = _$((_fl_g_val + h))))
+  endlet $1 h key
+}
+
+: $((val = key = 0))
+_fl_l_put() { let key $2; let val $3
+  if [ $_fl_nl -ge 1000 ] ; then
+    defstr __str_186 "too many local variables"
+    _fatal_error __ $__str_186
+  fi
+  : $((_$((_fl_l_key + _fl_nl)) = key))
+  : $((_$((_fl_l_val + _fl_nl)) = val))
+  : $((_fl_nl += 1))
+  endlet $1 val key
+}
+
+: $((i = ident = 0))
+_fl_lookup() { let ident $2
+  let i
+  i=$((_fl_nl - 1))
+  while [ $i -ge 0 ]; do
+    if [ $((_$((_fl_l_key + i)))) = $ident ] ; then
+      : $(($1 = _$((_fl_l_val + i))))
+      endlet $1 i ident
+      return
+    fi
+    : $((i -= 1))
+  done
+  _fl_g_get $1 $ident
+  endlet $1 i ident
+}
+
+: $((op = t = 0))
+_fl_is_dbl() { let t $2
+  let op
+  if [ $t = 0 ] ; then
+    : $(($1 = 0))
+    endlet $1 op t
+    return
+  fi
+  _get_op op $t
+  : $(($1 = (op == _DOUBLE_KW) || (op == _FLOAT_KW)))
+  endlet $1 op t
+}
+
+: $((op = t = 0))
+_fl_is_ptr() { let t $2
+  let op
+  if [ $t = 0 ] ; then
+    : $(($1 = 0))
+    endlet $1 op t
+    return
+  fi
+  _get_op op $t
+  : $(($1 = (op == __STAR__) || (op == __LBRACK__)))
+  endlet $1 op t
+}
+
+: $((op = t = 0))
+_fl_is_int() { let t $2
+  let op
+  if [ $t = 0 ] ; then
+    : $(($1 = 1))
+    endlet $1 op t
+    return
+  fi
+  _get_op op $t
+  : $(($1 = (op == _INT_KW) || (op == _CHAR_KW) || (op == _SHORT_KW) || (op == _LONG_KW) || (op == _ENUM_KW)))
+  endlet $1 op t
+}
+
+: $((__t1 = t = 0))
+_fl_pointee() { let t $2
+  let __t1
+  if [ $t = 0 ] ; then
+    : $(($1 = 0))
+    endlet $1 __t1 t
+    return
+  fi
+  if _get_op __t1 $t; [ $__t1 = $__STAR__ ] ; then
+    _get_child $1 $t 1
+    endlet $1 __t1 t
+    return
+  fi
+  if _get_op __t1 $t; [ $__t1 = $__LBRACK__ ] ; then
+    _get_child $1 $t 0
+    endlet $1 __t1 t
+    return
+  fi
+  : $(($1 = 0))
+  endlet $1 __t1 t
+}
+
+: $((__t1 = members = op = t = 0))
+_fl_note_type() { let t $2
+  let op; let members; let __t1
+  while [ $t != 0 ]; do
+    _get_op op $t
+    if [ $op = $__STAR__ ] ; then
+      _get_child t $t 1
+    elif [ $op = $__LBRACK__ ] ; then
+      _get_child t $t 0
+    elif [ $op = $__LPAREN__ ] ; then
+      _get_child t $t 0
+    elif [ $op = $_STRUCT_KW ] || [ $op = $_UNION_KW ] ; then
+      _get_child members $t 2
+      if [ $members != 0 ] && { _get_child __t1 $t 1; [ $__t1 != 0 ]; } ; then
+        if _get_child __t1 $t 1; _get_val __t1 $__t1; _fl_g_get __t1 $((-__t1)); [ $__t1 = $t ] ; then
+          endlet $1 __t1 members op t
+          return
+        fi
+        _get_child __t1 $t 1
+        _get_val __t1 $__t1
+        _fl_g_put __ $((-__t1)) $t
+      fi
+      while [ $members != 0 ]; do
+        _car __t1 $members
+        _get_child __t1 $__t1 1
+        _fl_note_type __ $__t1
+        _cdr members $members
+      done
+      break
+    else
+      break
+    fi
+  done
+  endlet $1 __t1 members op t
+}
+
+: $((__t1 = op = r = decl = members = ident = t = 0))
+_fl_member() { let t $2; let ident $3
+  let members; let decl; let r; let op; let __t1
+  if [ $t = 0 ] ; then
+    : $(($1 = 0))
+    endlet $1 __t1 op r decl members ident t
+    return
+  fi
+  _get_op op $t
+  if [ $op != $_STRUCT_KW ] && [ $op != $_UNION_KW ] ; then
+    : $(($1 = 0))
+    endlet $1 __t1 op r decl members ident t
+    return
+  fi
+  _get_child members $t 2
+  if [ $members = 0 ] && { _get_child __t1 $t 1; [ $__t1 != 0 ]; } ; then
+    _get_child __t1 $t 1
+    _get_val __t1 $__t1
+    _fl_g_get t $((-__t1))
+    if [ $t = 0 ] ; then
+      : $(($1 = 0))
+      endlet $1 __t1 op r decl members ident t
+      return
+    fi
+    _get_child members $t 2
+  fi
+  while [ $members != 0 ]; do
+    _car decl $members
+    if _get_child __t1 $decl 0; [ $__t1 = 0 ] ; then
+      _get_child __t1 $decl 1
+      _fl_member r $__t1 $ident
+      if [ $r != 0 ] ; then
+        : $(($1 = r))
+        endlet $1 __t1 op r decl members ident t
+        return
+      fi
+    elif _get_child __t1 $decl 0; _get_val __t1 $__t1; [ $__t1 = $ident ] ; then
+      _get_child $1 $decl 1
+      endlet $1 __t1 op r decl members ident t
+      return
+    fi
+    _cdr members $members
+  done
+  : $(($1 = 0))
+  endlet $1 __t1 op r decl members ident t
+}
+
+: $((__t2 = __t1 = a = id = 0))
+_fl_call1() { let id $2; let a $3
+  let __t1; let __t2
+  _new_ast0 __t1 $_IDENTIFIER $id
+  _cons __t2 $a 0
+  _new_ast2 $1 $__LPAREN__ $__t1 $__t2
+  endlet $1 __t2 __t1 a id
+}
+
+: $((__t2 = __t1 = b = a = id = 0))
+_fl_call2() { let id $2; let a $3; let b $4
+  let __t1; let __t2
+  _new_ast0 __t1 $_IDENTIFIER $id
+  _cons __t2 $b 0
+  _cons __t2 $a $__t2
+  _new_ast2 $1 $__LPAREN__ $__t1 $__t2
+  endlet $1 __t2 __t1 b a id
+}
+
+: $((obj = b3 = b2 = b1 = b0 = 0))
+_fl_lit() { let b0 $2; let b1 $3; let b2 $4; let b3 $5
+  let obj
+  _alloc_obj obj 4
+  : $((_$((_heap + obj)) = b0))
+  : $((_$((_heap + obj + 1)) = b1))
+  : $((_$((_heap + obj + 2)) = b2))
+  : $((_$((_heap + obj + 3)) = b3))
+  _new_ast0 $1 $_DOUBLE_LIT $obj
+  endlet $1 obj b3 b2 b1 b0
+}
+
+: $((__t2 = __t1 = d = i = n = neg = v = op = e = 0))
+_fl_int_lit_to_dbl() { let e $2
+  let op; let v; let neg; let n; let i; let d; let __t1; let __t2
+  _get_op op $e
+  neg=0
+  n=0
+  if [ $op = $_INTEGER ] ; then
+    _get_val v $e
+  elif [ $op = $_CHARACTER ] ; then
+    _get_val __t1 $e
+    v=$((-__t1))
+  elif [ $op = $__MINUS__ ] && { _get_nb_children __t2 $e; [ $__t2 = 1 ]; } && { _get_child __t2 $e 0; _get_op __t2 $__t2; [ $__t2 = $_INTEGER ]; } ; then
+    _get_child __t1 $e 0
+    _get_val __t1 $__t1
+    v=$((-__t1))
+  else
+    : $(($1 = 0))
+    endlet $1 __t2 __t1 d i n neg v op e
+    return
+  fi
+  if [ $v -gt 0 ] ; then
+    neg=1
+    v=$((- v))
+  fi
+  while [ $v != 0 ]; do
+    d=$((-(v % 10)))
+    : $((_$((_fl_digits + n)) = d))
+    : $((n += 1))
+    v=$((v / 10))
+  done
+  i=0
+  while [ $i -lt $((n / 2)) ]; do
+    d=$((_$((_fl_digits + i))))
+    : $((_$((_fl_digits + i)) = _$((_fl_digits + ((n - 1) - i)))))
+    : $((_$((_fl_digits + (n - 1) - i)) = d))
+    : $((i += 1))
+  done
+  _fl_convert __ $_fl_digits $n 0 0 $neg
+  _fl_lit $1 $((_$((_fl_bits + 0)))) $((_$((_fl_bits + 1)))) $((_$((_fl_bits + 2)))) $((_$((_fl_bits + 3))))
+  endlet $1 __t2 __t1 d i n neg v op e
+}
+
+: $((__t1 = lit = to = from = e = 0))
+_fl_conv() { let e $2; let from $3; let to $4
+  let lit; let __t1
+  if [ $e = 0 ] ; then
+    : $(($1 = e))
+    endlet $1 __t1 lit to from e
+    return
+  fi
+  if { _fl_is_dbl __t1 $to; [ $__t1 != 0 ]; } && { _fl_is_dbl __t1 $from; [ $((!__t1)) != 0 ]; } && { _fl_is_ptr __t1 $from; [ $((!__t1)) != 0 ]; } ; then
+    _fl_int_lit_to_dbl lit $e
+    if [ $lit != 0 ] ; then
+      : $(($1 = lit))
+      endlet $1 __t1 lit to from e
+      return
+    fi
+    _fl_call1 $1 $_FL_ITOD_ID $e
+    endlet $1 __t1 lit to from e
+    return
+  fi
+  if { _fl_is_dbl __t1 $from; [ $__t1 != 0 ]; } && { _fl_is_dbl __t1 $to; [ $((!__t1)) != 0 ]; } && { _fl_is_int __t1 $to; [ $__t1 != 0 ]; } ; then
+    _fl_call1 $1 $_FL_DTOI_ID $e
+    endlet $1 __t1 lit to from e
+    return
+  fi
+  : $(($1 = e))
+  endlet $1 __t1 lit to from e
+}
+
+: $((__t3 = __t2 = __t1 = b3 = e = 0))
+_fl_neg() { let e $2
+  let b3; let __t1; let __t2; let __t3
+  if _get_op __t1 $e; [ $__t1 = $_DOUBLE_LIT ] ; then
+    _get_val __t1 $e
+    b3=$((_$((_heap + __t1 + 3))))
+    if [ $b3 != 0 ] || { _get_val __t1 $e; [ $((_$((_heap + __t1)))) != 0 ]; } || { _get_val __t1 $e; [ $((_$((_heap + __t1 + 1)))) != 0 ]; } || { _get_val __t1 $e; [ $((_$((_heap + __t1 + 2)))) != 0 ]; } ; then
+      _get_val __t1 $e
+      _get_val __t2 $e
+      _get_val __t3 $e
+      _fl_lit $1 $((_$((_heap + __t1)))) $((_$((_heap + __t2 + 1)))) $((_$((_heap + __t3 + 2)))) $((b3 ^ 32768))
+      endlet $1 __t3 __t2 __t1 b3 e
+      return
+    fi
+  fi
+  _fl_call1 $1 $_FL_DNEG_ID $e
+  endlet $1 __t3 __t2 __t1 b3 e
+}
+
+: $((__t1 = i = nb = op = e = 0))
+_fl_has_call() { let e $2
+  let op; let nb; let i; let __t1
+  if [ $e = 0 ] ; then
+    : $(($1 = 0))
+    endlet $1 __t1 i nb op e
+    return
+  fi
+  _get_op op $e
+  if [ $op = $__LPAREN__ ] ; then
+    : $(($1 = 1))
+    endlet $1 __t1 i nb op e
+    return
+  fi
+  if [ $op = $_SIZEOF_KW ] ; then
+    : $(($1 = 0))
+    endlet $1 __t1 i nb op e
+    return
+  fi
+  if [ $op = $_CAST ] ; then
+    _get_child __t1 $e 1
+    _fl_has_call $1 $__t1
+    endlet $1 __t1 i nb op e
+    return
+  fi
+  _get_nb_children nb $e
+  i=0
+  while [ $i -lt $nb ]; do
+    if _get_child __t1 $e $i; _fl_has_call __t1 $__t1; [ $__t1 != 0 ] ; then
+      : $(($1 = 1))
+      endlet $1 __t1 i nb op e
+      return
+    fi
+    : $((i += 1))
+  done
+  : $(($1 = 0))
+  endlet $1 __t1 i nb op e
+}
+
+: $((__t2 = __t1 = c = op = e = 0))
+_fl_test_form() { let e $2
+  let op; let c; let __t1; let __t2
+  if [ $e = 0 ] ; then
+    : $(($1 = e))
+    endlet $1 __t2 __t1 c op e
+    return
+  fi
+  _get_op op $e
+  if { [ $op = $_AMP_AMP ] || [ $op = $_BAR_BAR ]; } && { _get_nb_children __t1 $e; [ $__t1 = 2 ]; } ; then
+    _get_child __t1 $e 0
+    _fl_test_form __t1 $__t1
+    _set_child __ $e 0 $__t1
+    _get_child __t1 $e 1
+    _fl_test_form __t1 $__t1
+    _set_child __ $e 1 $__t1
+    : $(($1 = e))
+    endlet $1 __t2 __t1 c op e
+    return
+  fi
+  if [ $op = $__EXCL__ ] && { _get_nb_children __t1 $e; [ $__t1 = 1 ]; } ; then
+    _get_child c $e 0
+    _get_op op $c
+    if { [ $op = $_AMP_AMP ] || [ $op = $_BAR_BAR ]; } && { _get_nb_children __t1 $c; [ $__t1 = 2 ]; } && { _fl_has_call __t1 $c; [ $__t1 != 0 ]; } ; then
+      if [ $op = $_AMP_AMP ] ; then
+        op=$_BAR_BAR
+      else
+        op=$_AMP_AMP
+      fi
+      _get_child __t1 $c 0
+      _new_ast1 __t1 $__EXCL__ $__t1
+      _fl_test_form __t1 $__t1
+      _get_child __t2 $c 1
+      _new_ast1 __t2 $__EXCL__ $__t2
+      _fl_test_form __t2 $__t2
+      _new_ast2 $1 $op $__t1 $__t2
+      endlet $1 __t2 __t1 c op e
+      return
+    fi
+    if [ $op = $__EXCL__ ] && { _get_nb_children __t1 $c; [ $__t1 = 1 ]; } ; then
+      _get_child __t1 $c 0
+      _fl_test_form $1 $__t1
+      endlet $1 __t2 __t1 c op e
+      return
+    fi
+  fi
+  : $(($1 = e))
+  endlet $1 __t2 __t1 c op e
+}
+
+: $((__t1 = e = 0))
+_fl_cond() { let e $2
+  let __t1
+  if [ $e = 0 ] ; then
+    : $(($1 = 0))
+    endlet $1 __t1 e
+    return
+  fi
+  _fl_expr e $e
+  if _fl_is_dbl __t1 $_fl_ty; [ $__t1 != 0 ] ; then
+    _fl_call1 e $_FL_DTRUE_ID $e
+  fi
+  _fl_ty=$_fl_t_int
+  _fl_test_form $1 $e
+  endlet $1 __t1 e
+}
+
+: $((__t2 = __t1 = bt = b = at = a = id = 0))
+_fl_binop() { let id $2; let a $3; let at $4; let b $5; let bt $6
+  let __t1; let __t2
+  _fl_conv __t1 $a $at $_fl_t_double
+  _fl_conv __t2 $b $bt $_fl_t_double
+  _fl_call2 $1 $id $__t1 $__t2
+  endlet $1 __t2 __t1 bt b at a id
+}
+
+: $((__t1 = cell = pt = a = last = res = params = fun_type = args = 0))
+_fl_args() { let args $2; let fun_type $3
+  let params; let res; let last; let a; let pt; let cell; let __t1
+  params=0
+  res=0
+  last=0
+  if [ $fun_type != 0 ] && { _get_op __t1 $fun_type; [ $__t1 = $__LPAREN__ ]; } ; then
+    _get_child params $fun_type 1
+  fi
+  while [ $args != 0 ]; do
+    _car __t1 $args
+    _fl_expr a $__t1
+    if [ $params != 0 ] ; then
+      _car __t1 $params
+      _get_child pt $__t1 1
+      _fl_conv a $a $_fl_ty $pt
+      _cdr params $params
+    fi
+    _cons cell $a 0
+    if [ $res = 0 ] ; then
+      res=$cell
+    else
+      _set_child __ $last 1 $cell
+    fi
+    last=$cell
+    _cdr args $args
+  done
+  : $(($1 = res))
+  endlet $1 __t1 cell pt a last res params fun_type args
+}
+
+: $((__t1 = assign = one = back = id = value_unused = t = op = e = 0))
+_fl_incdec() { let e $2; let op $3; let t $4; let value_unused $5
+  let id; let back; let one; let assign; let __t1
+  id=$_FL_DADD_ID
+  back=$_FL_DSUB_ID
+  _fl_lit one 0 0 0 16368
+  if [ $op = $_MINUS_MINUS_PRE ] || [ $op = $_MINUS_MINUS_POST ] ; then
+    id=$_FL_DSUB_ID
+    back=$_FL_DADD_ID
+  fi
+  _fl_call2 __t1 $id $e $one
+  _new_ast2 assign $__EQ__ $e $__t1
+  if [ $op = $_PLUS_PLUS_PRE ] || [ $op = $_MINUS_MINUS_PRE ] || [ $value_unused != 0 ] ; then
+    : $(($1 = assign))
+    endlet $1 __t1 assign one back id value_unused t op e
+    return
+  fi
+  _fl_call2 __t1 $back $e $one
+  _new_ast2 $1 $__COMMA__ $assign $__t1
+  endlet $1 __t1 assign one back id value_unused t op e
+}
+
+: $((__t2 = __t1 = id = t = bt = at = c = b = a = nb = op = value_unused = e = 0))
+_fl_expr_go() { let e $2; let value_unused $3
+  let op; let nb; let a; let b; let c; let at; let bt; let t; let id; let __t1; let __t2
+  if [ $e = 0 ] ; then
+    _fl_ty=$_fl_t_int
+    : $(($1 = 0))
+    endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+    return
+  fi
+  _get_op op $e
+  _get_nb_children nb $e
+  if [ $op = $_DOUBLE_LIT ] ; then
+    _fl_ty=$_fl_t_double
+    if { _get_val __t1 $e; [ $((_$((_heap + __t1 + 3)))) = 32768 ]; } && { _get_val __t1 $e; [ $((_$((_heap + __t1)))) = 0 ]; } && { _get_val __t1 $e; [ $((_$((_heap + __t1 + 1)))) = 0 ]; } && { _get_val __t1 $e; [ $((_$((_heap + __t1 + 2)))) = 0 ]; } ; then
+      _fl_lit __t1 0 0 0 0
+      _fl_call1 $1 $_FL_DNEG_ID $__t1
+      endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+      return
+    fi
+    : $(($1 = e))
+    endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+    return
+  fi
+  if [ $op = $_IDENTIFIER ] ; then
+    _get_val __t1 $e
+    _fl_lookup _fl_ty $__t1
+    if [ $_fl_ty = 0 ] ; then
+      _fl_ty=$_fl_t_int
+    fi
+    : $(($1 = e))
+    endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+    return
+  fi
+  if [ $op = $_STRING ] ; then
+    _fl_ty=$_fl_t_charp
+    : $(($1 = e))
+    endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+    return
+  fi
+  if [ $nb = 0 ] ; then
+    _fl_ty=$_fl_t_int
+    : $(($1 = e))
+    endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+    return
+  fi
+  if [ $op = $_SIZEOF_KW ] ; then
+    _fl_ty=$_fl_t_int
+    : $(($1 = e))
+    endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+    return
+  fi
+  if [ $op = $_CAST ] ; then
+    _get_child __t1 $e 0
+    _get_child t $__t1 1
+    _get_child __t1 $e 1
+    _fl_expr a $__t1
+    if _get_op __t1 $t; [ $__t1 = $_VOID_KW ] ; then
+      _set_child __ $e 1 $a
+    elif { _fl_is_dbl __t1 $t; [ $__t1 != 0 ]; } || { _fl_is_dbl __t1 $_fl_ty; [ $__t1 != 0 ]; } ; then
+      _fl_conv a $a $_fl_ty $t
+      if _fl_is_dbl __t1 $t; [ $__t1 != 0 ] ; then
+        _fl_ty=$t
+        : $(($1 = a))
+        endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+        return
+      fi
+      _set_child __ $e 1 $a
+    else
+      _set_child __ $e 1 $a
+    fi
+    _fl_ty=$t
+    : $(($1 = e))
+    endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+    return
+  fi
+  if [ $nb = 1 ] ; then
+    if [ $op = $_PLUS_PLUS_PRE ] || [ $op = $_MINUS_MINUS_PRE ] || [ $op = $_PLUS_PLUS_POST ] || [ $op = $_MINUS_MINUS_POST ] ; then
+      _get_child __t1 $e 0
+      _fl_expr a $__t1
+      if _fl_is_dbl __t1 $_fl_ty; [ $__t1 != 0 ] ; then
+        _fl_incdec $1 $a $op $_fl_ty $value_unused
+        endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+        return
+      fi
+      _set_child __ $e 0 $a
+      : $(($1 = e))
+      endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+      return
+    fi
+    _get_child __t1 $e 0
+    _fl_expr a $__t1
+    at=$_fl_ty
+    if [ $op = $__MINUS__ ] ; then
+      if _fl_is_dbl __t1 $at; [ $__t1 != 0 ] ; then
+        _fl_neg $1 $a
+        endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+        return
+      fi
+      _set_child __ $e 0 $a
+      _fl_ty=$_fl_t_int
+      : $(($1 = e))
+      endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+      return
+    fi
+    if [ $op = $__PLUS__ ] ; then
+      : $(($1 = a))
+      endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+      return
+    fi
+    if [ $op = $__EXCL__ ] ; then
+      if _fl_is_dbl __t1 $at; [ $__t1 != 0 ] ; then
+        _fl_call1 a $_FL_DTRUE_ID $a
+      fi
+      _set_child __ $e 0 $a
+      _fl_ty=$_fl_t_int
+      : $(($1 = e))
+      endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+      return
+    fi
+    if [ $op = $__STAR__ ] ; then
+      _set_child __ $e 0 $a
+      _fl_pointee _fl_ty $at
+      if [ $_fl_ty = 0 ] ; then
+        _fl_ty=$_fl_t_int
+      fi
+      : $(($1 = e))
+      endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+      return
+    fi
+    if [ $op = $__AMP__ ] ; then
+      _set_child __ $e 0 $a
+      _new_ast2 _fl_ty $__STAR__ 0 $at
+      : $(($1 = e))
+      endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+      return
+    fi
+    _set_child __ $e 0 $a
+    _fl_ty=$_fl_t_int
+    : $(($1 = e))
+    endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+    return
+  fi
+  if [ $op = $__QUESTION__ ] ; then
+    id=0
+    if { _get_child __t1 $e 1; _fl_has_call __t1 $__t1; [ $__t1 != 0 ]; } || { _get_child __t1 $e 2; _fl_has_call __t1 $__t1; [ $__t1 != 0 ]; } ; then
+      id=1
+    fi
+    _get_child __t1 $e 0
+    _fl_cond c $__t1
+    _get_child __t1 $e 1
+    _fl_expr a $__t1
+    at=$_fl_ty
+    _get_child __t1 $e 2
+    _fl_expr b $__t1
+    bt=$_fl_ty
+    if { _fl_is_dbl __t1 $at; [ $__t1 != 0 ]; } || { _fl_is_dbl __t1 $bt; [ $__t1 != 0 ]; } ; then
+      _fl_conv a $a $at $_fl_t_double
+      _fl_conv b $b $bt $_fl_t_double
+      _fl_ty=$_fl_t_double
+    elif _fl_is_ptr __t1 $at; [ $__t1 != 0 ] ; then
+      _fl_ty=$at
+    else
+      _fl_ty=$bt
+    fi
+    if [ $((! id)) != 0 ] && { { _fl_has_call __t1 $a; [ $__t1 != 0 ]; } || { _fl_has_call __t1 $b; [ $__t1 != 0 ]; }; } ; then
+      _new_ast0 __t1 $_IDENTIFIER $_FL_SEL_ID
+      _cons __t2 $b 0
+      _cons __t2 $a $__t2
+      _cons __t2 $c $__t2
+      _new_ast2 $1 $__LPAREN__ $__t1 $__t2
+      endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+      return
+    fi
+    _set_child __ $e 0 $c
+    _set_child __ $e 1 $a
+    _set_child __ $e 2 $b
+    : $(($1 = e))
+    endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+    return
+  fi
+  if [ $op = $__LPAREN__ ] ; then
+    _get_child a $e 0
+    t=0
+    if _get_op __t1 $a; [ $__t1 = $_IDENTIFIER ] ; then
+      if { { _get_val __t1 $a; [ $__t1 = $_FL_BITS_ID ]; } || { _get_val __t1 $a; [ $__t1 = $_FL_FROM_BITS_ID ]; }; } && { _get_child __t1 $e 1; [ $__t1 != 0 ]; } ; then
+        _get_child __t1 $e 1
+        _car __t1 $__t1
+        _fl_expr b $__t1
+        if _get_val __t1 $a; [ $__t1 = $_FL_BITS_ID ] ; then
+          _fl_ty=$_fl_t_int
+        else
+          _fl_ty=$_fl_t_double
+        fi
+        : $(($1 = b))
+        endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+        return
+      fi
+      _get_val __t1 $a
+      _fl_lookup t $__t1
+      if [ $t != 0 ] && { _get_op __t1 $t; [ $__t1 = $__STAR__ ]; } ; then
+        _get_child t $t 1
+      fi
+      if { _get_val __t1 $a; [ $__t1 = $_PRINTF_ID ]; } && { _get_child __t1 $e 1; [ $__t1 != 0 ]; } && { _get_child __t1 $e 1; _car __t1 $__t1; _get_op __t1 $__t1; [ $__t1 = $_STRING ]; } ; then
+        _get_child __t1 $e 1
+        _fl_printf __t1 $__t1
+        _set_child __ $e 1 $__t1
+        _fl_ty=$_fl_t_int
+        : $(($1 = e))
+        endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+        return
+      fi
+    fi
+    _get_child __t1 $e 1
+    _fl_args __t1 $__t1 $t
+    _set_child __ $e 1 $__t1
+    if [ $t != 0 ] && { _get_op __t1 $t; [ $__t1 = $__LPAREN__ ]; } ; then
+      _get_child _fl_ty $t 0
+    else
+      _fl_ty=$_fl_t_int
+    fi
+    : $(($1 = e))
+    endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+    return
+  fi
+  if [ $op = $__PERIOD__ ] || [ $op = $_ARROW ] ; then
+    _get_child __t1 $e 0
+    _fl_expr a $__t1
+    at=$_fl_ty
+    if [ $op = $_ARROW ] ; then
+      _fl_pointee at $at
+    fi
+    _set_child __ $e 0 $a
+    _get_child __t1 $e 1
+    _get_val __t1 $__t1
+    _fl_member _fl_ty $at $__t1
+    if [ $_fl_ty = 0 ] ; then
+      _fl_ty=$_fl_t_int
+    fi
+    : $(($1 = e))
+    endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+    return
+  fi
+  if [ $op = $_AMP_AMP ] || [ $op = $_BAR_BAR ] ; then
+    _get_child __t1 $e 0
+    _fl_cond __t1 $__t1
+    _set_child __ $e 0 $__t1
+    _get_child __t1 $e 1
+    _fl_cond __t1 $__t1
+    _set_child __ $e 1 $__t1
+    _fl_ty=$_fl_t_int
+    : $(($1 = e))
+    endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+    return
+  fi
+  if [ $op = $__COMMA__ ] ; then
+    _get_child __t1 $e 0
+    _fl_expr_unused __t1 $__t1
+    _set_child __ $e 0 $__t1
+    _get_child __t1 $e 1
+    _fl_expr_go b $__t1 $value_unused
+    _set_child __ $e 1 $b
+    : $(($1 = e))
+    endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+    return
+  fi
+  _get_child __t1 $e 0
+  _fl_expr a $__t1
+  at=$_fl_ty
+  _get_child __t1 $e 1
+  _fl_expr b $__t1
+  bt=$_fl_ty
+  if [ $op = $__EQ__ ] ; then
+    _set_child __ $e 0 $a
+    _fl_conv __t1 $b $bt $at
+    _set_child __ $e 1 $__t1
+    _fl_ty=$at
+    : $(($1 = e))
+    endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+    return
+  fi
+  if [ $op = $_PLUS_EQ ] || [ $op = $_MINUS_EQ ] || [ $op = $_STAR_EQ ] || [ $op = $_SLASH_EQ ] ; then
+    if { _fl_is_dbl __t1 $at; [ $__t1 != 0 ]; } || { _fl_is_dbl __t1 $bt; [ $__t1 != 0 ]; } ; then
+      if [ $op = $_PLUS_EQ ] ; then
+        id=$_FL_DADD_ID
+      elif [ $op = $_MINUS_EQ ] ; then
+        id=$_FL_DSUB_ID
+      elif [ $op = $_STAR_EQ ] ; then
+        id=$_FL_DMUL_ID
+      else
+        id=$_FL_DDIV_ID
+      fi
+      _fl_ty=$at
+      _fl_binop __t1 $id $a $at $b $bt
+      _fl_conv __t1 $__t1 $_fl_t_double $at
+      _new_ast2 $1 $__EQ__ $a $__t1
+      endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+      return
+    fi
+  fi
+  if [ $op = $__LBRACK__ ] ; then
+    _set_child __ $e 0 $a
+    _set_child __ $e 1 $b
+    if _fl_is_ptr __t1 $at; [ $__t1 != 0 ] ; then
+      _fl_pointee _fl_ty $at
+    elif _fl_is_ptr __t1 $bt; [ $__t1 != 0 ] ; then
+      _fl_pointee _fl_ty $bt
+    else
+      _fl_ty=$_fl_t_int
+    fi
+    if [ $_fl_ty = 0 ] ; then
+      _fl_ty=$_fl_t_int
+    fi
+    : $(($1 = e))
+    endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+    return
+  fi
+  if { _fl_is_dbl __t1 $at; [ $__t1 != 0 ]; } || { _fl_is_dbl __t1 $bt; [ $__t1 != 0 ]; } ; then
+    if [ $op = $__PLUS__ ] ; then
+      _fl_ty=$_fl_t_double
+      _fl_binop $1 $_FL_DADD_ID $a $at $b $bt
+      endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+      return
+    fi
+    if [ $op = $__MINUS__ ] ; then
+      _fl_ty=$_fl_t_double
+      _fl_binop $1 $_FL_DSUB_ID $a $at $b $bt
+      endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+      return
+    fi
+    if [ $op = $__STAR__ ] ; then
+      _fl_ty=$_fl_t_double
+      _fl_binop $1 $_FL_DMUL_ID $a $at $b $bt
+      endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+      return
+    fi
+    if [ $op = $__SLASH__ ] ; then
+      _fl_ty=$_fl_t_double
+      _fl_binop $1 $_FL_DDIV_ID $a $at $b $bt
+      endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+      return
+    fi
+    _fl_ty=$_fl_t_int
+    if [ $op = $__LT__ ] ; then
+      _fl_binop $1 $_FL_DLT_ID $a $at $b $bt
+      endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+      return
+    fi
+    if [ $op = $__GT__ ] ; then
+      _fl_binop $1 $_FL_DLT_ID $b $bt $a $at
+      endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+      return
+    fi
+    if [ $op = $_LT_EQ ] ; then
+      _fl_binop $1 $_FL_DLE_ID $a $at $b $bt
+      endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+      return
+    fi
+    if [ $op = $_GT_EQ ] ; then
+      _fl_binop $1 $_FL_DLE_ID $b $bt $a $at
+      endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+      return
+    fi
+    if [ $op = $_EQ_EQ ] ; then
+      _fl_binop $1 $_FL_DEQ_ID $a $at $b $bt
+      endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+      return
+    fi
+    if [ $op = $_EXCL_EQ ] ; then
+      _fl_binop __t1 $_FL_DEQ_ID $a $at $b $bt
+      _new_ast1 $1 $__EXCL__ $__t1
+      endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+      return
+    fi
+  fi
+  _set_child __ $e 0 $a
+  _set_child __ $e 1 $b
+  if [ $op = $__PLUS__ ] && { _fl_is_ptr __t1 $at; [ $__t1 != 0 ]; } ; then
+    _fl_ty=$at
+  elif [ $op = $__PLUS__ ] && { _fl_is_ptr __t1 $bt; [ $__t1 != 0 ]; } ; then
+    _fl_ty=$bt
+  elif [ $op = $__MINUS__ ] && { _fl_is_ptr __t1 $at; [ $__t1 != 0 ]; } && { _fl_is_ptr __t1 $bt; [ $((!__t1)) != 0 ]; } ; then
+    _fl_ty=$at
+  elif [ $op = $__EQ__ ] || [ $op = $_PLUS_EQ ] || [ $op = $_MINUS_EQ ] ; then
+    _fl_ty=$at
+  else
+    _fl_ty=$_fl_t_int
+  fi
+  : $(($1 = e))
+  endlet $1 __t2 __t1 id t bt at c b a nb op value_unused e
+}
+
+: $((e = 0))
+_fl_expr() { let e $2
+  _fl_expr_go $1 $e 0
+  endlet $1 e
+}
+
+: $((e = 0))
+_fl_expr_unused() { let e $2
+  _fl_expr_go $1 $e 1
+  endlet $1 e
+}
+
+: $((__t4 = __t3 = __t2 = __t1 = spec = changed = conv = n = flags = cell = a = prec = width = last = res = args = f = params = 0))
+_fl_printf() { let params $2
+  let f; let args; let res; let last; let width; let prec; let a; let cell; let flags; let n; let conv; let changed; let spec; let __t1; let __t2; let __t3; let __t4
+  _car __t1 $params
+  _get_val __t1 $__t1
+  _symbol_buf f $__t1
+  _cdr args $params
+  res=0
+  last=0
+  changed=0
+  spec=$f
+  while [ $((_$spec)) != 0 ]; do
+    if [ $((_$spec)) = $__PERCENT__ ] ; then
+      : $((spec += 1))
+      while [ $((_$spec)) = $__MINUS__ ] || [ $((_$spec)) = $__PLUS__ ] || [ $((_$spec)) = $__SPACE__ ] || [ $((_$spec)) = $__HASH__ ] || [ $((_$spec)) = $__0__ ] || [ $((_$spec)) = $__STAR__ ] || [ $((_$spec)) = $__PERIOD__ ] || [ $((_$spec)) = $__l__ ] || [ $((_$spec)) = $__L__ ] || [ $((_$spec)) = $__h__ ] || [ $((_$spec)) = $__z__ ] || [ $((_$spec)) = $__j__ ] || [ $((_$spec)) = $__t__ ] || { [ $__0__ -le $((_$spec)) ] && [ $((_$spec)) -le $__9__ ]; }; do
+        if [ $((_$spec)) = $__l__ ] || [ $((_$spec)) = $__L__ ] || [ $((_$spec)) = $__h__ ] || [ $((_$spec)) = $__z__ ] || [ $((_$spec)) = $__j__ ] || [ $((_$spec)) = $__t__ ] ; then
+          changed=1
+        fi
+        : $((spec += 1))
+      done
+      if [ $((_$spec)) = $__f__ ] || [ $((_$spec)) = $__F__ ] || [ $((_$spec)) = $__e__ ] || [ $((_$spec)) = $__E__ ] || [ $((_$spec)) = $__g__ ] || [ $((_$spec)) = $__G__ ] ; then
+        changed=1
+      fi
+      if [ $((_$spec)) = 0 ] ; then
+        break
+      fi
+    fi
+    : $((spec += 1))
+  done
+  if [ $((! changed)) != 0 ] ; then
+    _fl_args $1 $params 0
+    endlet $1 __t4 __t3 __t2 __t1 spec changed conv n flags cell a prec width last res args f params
+    return
+  fi
+  _begin_symbol __
+  while [ $((_$f)) != 0 ]; do
+    if [ $((_$f)) != $__PERCENT__ ] ; then
+      _accum_symbol_char __ $((_$f))
+      : $((f += 1))
+      continue
+    fi
+    spec=$f
+    : $((f += 1))
+    if [ $((_$f)) = $__PERCENT__ ] ; then
+      _accum_symbol_char __ $__PERCENT__
+      _accum_symbol_char __ $__PERCENT__
+      : $((f += 1))
+      continue
+    fi
+    flags=0
+    width=0
+    prec=0
+    while [ $((_$f)) = $__MINUS__ ] || [ $((_$f)) = $__PLUS__ ] || [ $((_$f)) = $__SPACE__ ] || [ $((_$f)) = $__HASH__ ] || [ $((_$f)) = $__0__ ]; do
+      if [ $((_$f)) = $__MINUS__ ] ; then
+        flags=$((flags | 1))
+      fi
+      if [ $((_$f)) = $__PLUS__ ] ; then
+        flags=$((flags | 2))
+      fi
+      if [ $((_$f)) = $__SPACE__ ] ; then
+        flags=$((flags | 4))
+      fi
+      if [ $((_$f)) = $__HASH__ ] ; then
+        flags=$((flags | 8))
+      fi
+      if [ $((_$f)) = $__0__ ] ; then
+        flags=$((flags | 16))
+      fi
+      : $((f += 1))
+    done
+    if [ $((_$f)) = $__STAR__ ] ; then
+      if [ $args != 0 ] ; then
+        _car width $args
+        _cdr args $args
+      fi
+      : $((f += 1))
+    else
+      n=-1
+      while [ $__0__ -le $((_$f)) ] && [ $((_$f)) -le $__9__ ]; do
+        if [ $n -lt 0 ] ; then
+          n=0
+        fi
+        n=$((((n * 10) + _$f) - __0__))
+        : $((f += 1))
+      done
+      _new_ast0 width $_INTEGER $((- n))
+    fi
+    if [ $((_$f)) = $__PERIOD__ ] ; then
+      : $((f += 1))
+      if [ $((_$f)) = $__STAR__ ] ; then
+        if [ $args != 0 ] ; then
+          _car prec $args
+          _cdr args $args
+        fi
+        : $((f += 1))
+      else
+        n=0
+        while [ $__0__ -le $((_$f)) ] && [ $((_$f)) -le $__9__ ]; do
+          n=$((((n * 10) + _$f) - __0__))
+          : $((f += 1))
+        done
+        _new_ast0 prec $_INTEGER $((- n))
+      fi
+    else
+      _new_ast0 prec $_INTEGER 1
+    fi
+    while [ $((_$f)) = $__l__ ] || [ $((_$f)) = $__L__ ] || [ $((_$f)) = $__h__ ] || [ $((_$f)) = $__z__ ] || [ $((_$f)) = $__j__ ] || [ $((_$f)) = $__t__ ]; do
+      : $((f += 1))
+    done
+    conv=$((_$f))
+    if [ $conv != 0 ] ; then
+      : $((f += 1))
+    fi
+    if [ $conv = $__f__ ] || [ $conv = $__F__ ] || [ $conv = $__e__ ] || [ $conv = $__E__ ] || [ $conv = $__g__ ] || [ $conv = $__G__ ] ; then
+      _accum_symbol_char __ $__PERCENT__
+      _accum_symbol_char __ $__s__
+      a=0
+      if [ $args != 0 ] ; then
+        _car __t1 $args
+        _fl_expr a $__t1
+        _cdr args $args
+        _fl_conv a $a $_fl_ty $_fl_t_double
+      fi
+      if [ $a = 0 ] ; then
+        _fl_lit a 0 0 0 0
+      fi
+      _fl_expr width $width
+      _fl_expr prec $prec
+      _new_ast0 __t1 $_IDENTIFIER $_FL_DFMT_ID
+      _new_ast0 __t2 $_INTEGER $((- conv))
+      _new_ast0 __t3 $_INTEGER $((- flags))
+      _cons __t4 $prec 0
+      _cons __t4 $width $__t4
+      _cons __t3 $__t3 $__t4
+      _cons __t2 $__t2 $__t3
+      _cons __t2 $a $__t2
+      _new_ast2 a $__LPAREN__ $__t1 $__t2
+      _cons cell $a 0
+      if [ $res = 0 ] ; then
+        res=$cell
+      else
+        _set_child __ $last 1 $cell
+      fi
+      last=$cell
+    else
+      while [ $spec -lt $f ]; do
+        if [ $((_$spec)) != $__l__ ] && [ $((_$spec)) != $__L__ ] && [ $((_$spec)) != $__h__ ] && [ $((_$spec)) != $__z__ ] && [ $((_$spec)) != $__j__ ] && [ $((_$spec)) != $__t__ ] ; then
+          _accum_symbol_char __ $((_$spec))
+        fi
+        if [ $((_$spec)) = $__STAR__ ] && [ $args != 0 ] ; then
+          _car __t1 $args
+          _fl_expr __t1 $__t1
+          _cons cell $__t1 0
+          if [ $res = 0 ] ; then
+            res=$cell
+          else
+            _set_child __ $last 1 $cell
+          fi
+          last=$cell
+          _cdr args $args
+        fi
+        : $((spec += 1))
+      done
+      if [ $conv != 0 ] && [ $args != 0 ] ; then
+        _car __t1 $args
+        _fl_expr a $__t1
+        if _fl_is_dbl __t1 $_fl_ty; [ $__t1 != 0 ] ; then
+          _fl_call1 a $_FL_DTOI_ID $a
+        fi
+        _cons cell $a 0
+        if [ $res = 0 ] ; then
+          res=$cell
+        else
+          _set_child __ $last 1 $cell
+        fi
+        last=$cell
+        _cdr args $args
+      fi
+    fi
+  done
+  _end_symbol __t1
+  _new_ast0 a $_STRING $__t1
+  while [ $args != 0 ]; do
+    _car __t1 $args
+    _fl_expr __t1 $__t1
+    _cons cell $__t1 0
+    if [ $res = 0 ] ; then
+      res=$cell
+    else
+      _set_child __ $last 1 $cell
+    fi
+    last=$cell
+    _cdr args $args
+  done
+  _cons $1 $a $res
+  endlet $1 __t4 __t3 __t2 __t1 spec changed conv n flags cell a prec width last res args f params
+}
+
+: $((__t1 = op = e = 0))
+_fl_needs_test() { let e $2
+  let op; let __t1
+  if [ $e = 0 ] ; then
+    : $(($1 = 0))
+    endlet $1 __t1 op e
+    return
+  fi
+  _get_op op $e
+  if [ $op = $__EXCL__ ] && { _get_nb_children __t1 $e; [ $__t1 = 1 ]; } ; then
+    _get_child __t1 $e 0
+    _fl_needs_test $1 $__t1
+    endlet $1 __t1 op e
+    return
+  fi
+  if [ $op != $_AMP_AMP ] && [ $op != $_BAR_BAR ] ; then
+    : $(($1 = 0))
+    endlet $1 __t1 op e
+    return
+  fi
+  _fl_has_call $1 $e
+  endlet $1 __t1 op e
+}
+
+: $((__t1 = init = t = decl = decls = 0))
+_fl_local_decls() { let decls $2
+  let decl; let t; let init; let __t1
+  _get_child decls $decls 0
+  while [ $decls != 0 ]; do
+    _car decl $decls
+    _get_child t $decl 1
+    _fl_note_type __ $t
+    if _get_child __t1 $decl 0; [ $__t1 != 0 ] ; then
+      _get_child __t1 $decl 0
+      _get_val __t1 $__t1
+      _fl_l_put __ $__t1 $t
+    fi
+    _get_child init $decl 2
+    if [ $init != 0 ] && { _get_op __t1 $init; [ $__t1 != $_INITIALIZER_LIST ]; } ; then
+      _fl_expr init $init
+      _fl_conv __t1 $init $_fl_ty $t
+      _set_child __ $decl 2 $__t1
+    fi
+    _cdr decls $decls
+  done
+  endlet $1 __t1 init t decl decls
+}
+
+: $((__t2 = __t1 = r = rest = saved = op = s = 0))
+_fl_stmt() { let s $2
+  let op; let saved; let rest; let r; let __t1; let __t2
+  if [ $s = 0 ] ; then
+    : $(($1 = s))
+    endlet $1 __t2 __t1 r rest saved op s
+    return
+  fi
+  _get_op op $s
+  if [ $op = $__LBRACE__ ] ; then
+    saved=$_fl_nl
+    rest=$s
+    while [ $rest != 0 ]; do
+      _fl_stmt_child __ $rest 0
+      _get_child rest $rest 1
+    done
+    _fl_nl=$saved
+  elif [ $op = $_DECLS ] ; then
+    _fl_local_decls __ $s
+  elif [ $op = $_IF_KW ] ; then
+    _get_child __t1 $s 0
+    _fl_cond __t1 $__t1
+    _set_child __ $s 0 $__t1
+    _fl_stmt_child __ $s 1
+    _fl_stmt_child __ $s 2
+  elif [ $op = $_WHILE_KW ] ; then
+    _get_child __t1 $s 0
+    _fl_cond __t1 $__t1
+    _set_child __ $s 0 $__t1
+    _fl_stmt_child __ $s 1
+  elif [ $op = $_DO_KW ] ; then
+    _fl_stmt_child __ $s 0
+    _get_child __t1 $s 1
+    _fl_cond __t1 $__t1
+    _set_child __ $s 1 $__t1
+  elif [ $op = $_FOR_KW ] ; then
+    saved=$_fl_nl
+    if { _get_child __t1 $s 0; [ $__t1 != 0 ]; } && { _get_child __t1 $s 0; _get_op __t1 $__t1; [ $__t1 = $_DECLS ]; } ; then
+      _get_child __t1 $s 0
+      _fl_local_decls __ $__t1
+    else
+      _get_child __t1 $s 0
+      _fl_expr_unused __t1 $__t1
+      _set_child __ $s 0 $__t1
+    fi
+    _get_child __t1 $s 1
+    _fl_cond __t1 $__t1
+    _set_child __ $s 1 $__t1
+    _get_child __t1 $s 2
+    _fl_expr_unused __t1 $__t1
+    _set_child __ $s 2 $__t1
+    _fl_stmt_child __ $s 3
+    _fl_nl=$saved
+  elif [ $op = $_SWITCH_KW ] ; then
+    _get_child __t1 $s 0
+    _fl_expr __t1 $__t1
+    _set_child __ $s 0 $__t1
+    _fl_stmt_child __ $s 1
+  elif [ $op = $_CASE_KW ] ; then
+    _fl_stmt_child __ $s 1
+  elif [ $op = $_DEFAULT_KW ] ; then
+    _fl_stmt_child __ $s 0
+  elif [ $op = $__COLON__ ] ; then
+    _fl_stmt_child __ $s 1
+  elif [ $op = $_RETURN_KW ] ; then
+    if _get_child __t1 $s 0; [ $__t1 != 0 ] ; then
+      _get_child __t1 $s 0
+      _fl_expr r $__t1
+      if _fl_needs_test __t1 $r; [ $__t1 != 0 ] ; then
+        _new_ast0 __t1 $_INTEGER -1
+        _fl_conv __t1 $__t1 $_fl_t_int $_fl_ret_ty
+        _new_ast1 __t1 $_RETURN_KW $__t1
+        _new_ast0 __t2 $_INTEGER 0
+        _fl_conv __t2 $__t2 $_fl_t_int $_fl_ret_ty
+        _new_ast1 __t2 $_RETURN_KW $__t2
+        _new_ast3 $1 $_IF_KW $r $__t1 $__t2
+        endlet $1 __t2 __t1 r rest saved op s
+        return
+      fi
+      _fl_conv __t1 $r $_fl_ty $_fl_ret_ty
+      _set_child __ $s 0 $__t1
+    fi
+  elif [ $op = $_TYPEDEF_KW ] || [ $op = $_STRUCT_KW ] || [ $op = $_UNION_KW ] || [ $op = $_ENUM_KW ] ; then
+    if [ $op = $_TYPEDEF_KW ] ; then
+      _get_child __t1 $s 0
+      _car __t1 $__t1
+      _get_child __t1 $__t1 1
+      _fl_note_type __ $__t1
+    else
+      _fl_note_type __ $s
+    fi
+  fi
+  : $(($1 = s))
+  endlet $1 __t2 __t1 r rest saved op s
+}
+
+: $((__t4 = __t3 = __t2 = __t1 = op = c = i = s = 0))
+_fl_stmt_child() { let s $2; let i $3
+  let c; let op; let __t1; let __t2; let __t3; let __t4
+  _get_child c $s $i
+  if [ $c = 0 ] ; then
+    endlet $1 __t4 __t3 __t2 __t1 op c i s
+    return
+  fi
+  _get_op op $c
+  if [ $op = $__LBRACE__ ] || [ $op = $_DECLS ] || [ $op = $_IF_KW ] || [ $op = $_WHILE_KW ] || [ $op = $_DO_KW ] || [ $op = $_FOR_KW ] || [ $op = $_SWITCH_KW ] || [ $op = $_CASE_KW ] || [ $op = $_DEFAULT_KW ] || [ $op = $_RETURN_KW ] || [ $op = $__COLON__ ] || [ $op = $_GOTO_KW ] || [ $op = $_BREAK_KW ] || [ $op = $_CONTINUE_KW ] || [ $op = $_TYPEDEF_KW ] || [ $op = $_STRUCT_KW ] || [ $op = $_UNION_KW ] || [ $op = $_ENUM_KW ] ; then
+    _fl_stmt __t1 $c
+    _set_child __ $s $i $__t1
+  else
+    _fl_expr_unused c $c
+    if { _get_op __t1 $c; [ $__t1 = $__EQ__ ]; } && { _get_child __t1 $c 1; _fl_needs_test __t1 $__t1; [ $__t1 != 0 ]; } ; then
+      _get_child __t1 $c 1
+      _get_child __t2 $c 0
+      _new_ast0 __t3 $_INTEGER -1
+      _new_ast2 __t2 $__EQ__ $__t2 $__t3
+      _get_child __t3 $c 0
+      _new_ast0 __t4 $_INTEGER 0
+      _new_ast2 __t3 $__EQ__ $__t3 $__t4
+      _new_ast3 c $_IF_KW $__t1 $__t2 $__t3
+    fi
+    _set_child __ $s $i $c
+  fi
+  endlet $1 __t4 __t3 __t2 __t1 op c i s
+}
+
+: $((__t1 = lit = elem = lst = t = init = 0))
+_fl_glo_init() { let init $2; let t $3
+  let lst; let elem; let lit; let __t1
+  if [ $init = 0 ] ; then
+    : $(($1 = 0))
+    endlet $1 __t1 lit elem lst t init
+    return
+  fi
+  if _get_op __t1 $init; [ $__t1 = $_INITIALIZER_LIST ] ; then
+    if _get_op __t1 $t; [ $__t1 = $__LBRACK__ ] ; then
+      _get_child t $t 0
+    fi
+    _get_child lst $init 0
+    while [ $lst != 0 ]; do
+      _car __t1 $lst
+      _fl_glo_init __t1 $__t1 $t
+      _set_child __ $lst 0 $__t1
+      _cdr lst $lst
+    done
+    : $(($1 = init))
+    endlet $1 __t1 lit elem lst t init
+    return
+  fi
+  if _fl_is_dbl __t1 $t; [ $__t1 != 0 ] ; then
+    if { _get_op __t1 $init; [ $__t1 = $__MINUS__ ]; } && { _get_nb_children __t1 $init; [ $__t1 = 1 ]; } && { _get_child __t1 $init 0; _get_op __t1 $__t1; [ $__t1 = $_DOUBLE_LIT ]; } ; then
+      _get_child __t1 $init 0
+      _fl_neg $1 $__t1
+      endlet $1 __t1 lit elem lst t init
+      return
+    fi
+    _fl_int_lit_to_dbl lit $init
+    if [ $lit != 0 ] ; then
+      : $(($1 = lit))
+      endlet $1 __t1 lit elem lst t init
+      return
+    fi
+  fi
+  _fl_expr init $init
+  _fl_conv $1 $init $_fl_ty $t
+  endlet $1 __t1 lit elem lst t init
+}
+
+: $((__t2 = __t1 = body = params = t = decl = decls = op = node = 0))
+_fl_lower_glo_decl() { let node $2
+  let op; let decls; let decl; let t; let params; let body; let __t1; let __t2
+  _get_op op $node
+  if [ $((! _fl_initialized)) != 0 ] ; then
+    _fl_init __
+  fi
+  _fl_nl=0
+  if [ $op = $_DECLS ] ; then
+    _get_child decls $node 0
+    while [ $decls != 0 ]; do
+      _car decl $decls
+      _get_child t $decl 1
+      _fl_note_type __ $t
+      if _get_op __t1 $t; [ $__t1 = $__LPAREN__ ] ; then
+        _get_child params $t 1
+        while [ $params != 0 ]; do
+          _car __t1 $params
+          _get_child __t1 $__t1 1
+          _fl_note_type __ $__t1
+          _cdr params $params
+        done
+      fi
+      _get_child __t1 $decl 0
+      _get_val __t1 $__t1
+      _fl_g_put __ $__t1 $t
+      if _get_op __t1 $t; [ $__t1 != $__LPAREN__ ] ; then
+        _get_child __t1 $decl 2
+        _fl_glo_init __t1 $__t1 $t
+        _set_child __ $decl 2 $__t1
+      fi
+      _cdr decls $decls
+    done
+  elif [ $op = $_FUN_DECL ] ; then
+    _get_child decl $node 0
+    _get_child t $decl 1
+    _fl_note_type __ $t
+    _get_child __t1 $decl 0
+    _get_val __t1 $__t1
+    _fl_g_put __ $__t1 $t
+    _get_child body $node 1
+    if [ $body = 0 ] || [ $body = -1 ] ; then
+      endlet $1 __t2 __t1 body params t decl decls op node
+      return
+    fi
+    _get_child params $t 1
+    while [ $params != 0 ]; do
+      _car __t1 $params
+      _get_child __t1 $__t1 1
+      _fl_note_type __ $__t1
+      if _car __t1 $params; _get_child __t1 $__t1 0; [ $__t1 != 0 ] ; then
+        _car __t1 $params
+        _get_child __t1 $__t1 0
+        _get_val __t1 $__t1
+        _car __t2 $params
+        _get_child __t2 $__t2 1
+        _fl_l_put __ $__t1 $__t2
+      fi
+      _cdr params $params
+    done
+    _get_child _fl_ret_ty $t 0
+    _fl_stmt __ $body
+    _fl_nl=0
+  elif [ $op = $_TYPEDEF_KW ] ; then
+    _get_child __t1 $node 0
+    _car __t1 $__t1
+    _get_child __t1 $__t1 1
+    _fl_note_type __ $__t1
+  elif [ $op = $_STRUCT_KW ] || [ $op = $_UNION_KW ] ; then
+    _fl_note_type __ $node
+  fi
+  endlet $1 __t2 __t1 body params t decl decls op node
+}
+
+: $((t = cur = r = neg = p3 = p2 = p1 = p0 = obj = node = 0))
+_fl_lit_text() { let node $2
+  let obj; let p0; let p1; let p2; let p3; let neg; let r; let cur; let t
+  _get_val obj $node
+  p0=$((_$((_heap + obj))))
+  p1=$((_$((_heap + obj + 1))))
+  p2=$((_$((_heap + obj + 2))))
+  p3=$((_$((_heap + obj + 3))))
+  neg=0
+  t=0
+  if [ $p3 -ge 32768 ] ; then
+    neg=1
+    p0=$((65535 - p0))
+    p1=$((65535 - p1))
+    p2=$((65535 - p2))
+    p3=$((65535 - p3))
+    : $((p0 += 1))
+    if [ $p0 = 65536 ] ; then
+      p0=0
+      : $((p1 += 1))
+    fi
+    if [ $p1 = 65536 ] ; then
+      p1=0
+      : $((p2 += 1))
+    fi
+    if [ $p2 = 65536 ] ; then
+      p2=0
+      : $((p3 += 1))
+    fi
+  fi
+  if [ $((p0 | p1 | p2 | p3)) = 0 ] ; then
+    : $(($1 = -__0__))
+    endlet $1 t cur r neg p3 p2 p1 p0 obj node
+    return
+  fi
+  while [ $((p0 | p1 | p2 | p3)) != 0 ]; do
+    cur=$p3
+    p3=$((cur / 10))
+    r=$((cur % 10))
+    cur=$(((r * 65536) + p2))
+    p2=$((cur / 10))
+    r=$((cur % 10))
+    cur=$(((r * 65536) + p1))
+    p1=$((cur / 10))
+    r=$((cur % 10))
+    cur=$(((r * 65536) + p0))
+    p0=$((cur / 10))
+    r=$((cur % 10))
+    cur=$((__0__ + r))
+    _string_concat t $((- cur)) $t
+  done
+  if [ $neg != 0 ] ; then
+    _string_concat t $((-__MINUS__)) $t
+  fi
+  : $(($1 = t))
+  endlet $1 t cur r neg p3 p2 p1 p0 obj node
 }
 
 #_ STMT_CTX enum declaration
@@ -4704,8 +6741,8 @@ _nest_level=0
 : $((decl = 0))
 _append_glo_decl() { let decl $2
   if [ $((_glo_decl_ix + 3)) -ge 100000 ] ; then
-    defstr __str_169 "glo_decls overflow"
-    _fatal_error __ $__str_169
+    defstr __str_187 "glo_decls overflow"
+    _fatal_error __ $__str_187
   fi
   : $((_$((_glo_decls + _glo_decl_ix)) = _nest_level))
   : $((_$((_glo_decls + _glo_decl_ix + 1)) = 1))
@@ -4716,8 +6753,8 @@ _append_glo_decl() { let decl $2
 
 _append_glo_decl_fixup() {
   if [ $((_glo_decl_ix + 3)) -ge 100000 ] ; then
-    defstr __str_169 "glo_decls overflow"
-    _fatal_error __ $__str_169
+    defstr __str_187 "glo_decls overflow"
+    _fatal_error __ $__str_187
   fi
   : $((_$((_glo_decls + _glo_decl_ix)) = -(_nest_level + 1)))
   : $((_$((_glo_decls + _glo_decl_ix + 1)) = 1))
@@ -4729,8 +6766,8 @@ _append_glo_decl_fixup() {
 : $((decl = fixup_ix = 0))
 _fixup_glo_decl() { let fixup_ix $2; let decl $3
   if [ $((_$((_glo_decls + fixup_ix)))) -ge 0 ] ; then
-    defstr __str_170 "fixup_glo_decl: invalid fixup"
-    _fatal_error __ $__str_170
+    defstr __str_188 "fixup_glo_decl: invalid fixup"
+    _fatal_error __ $__str_188
   fi
   : $((_$((_glo_decls + fixup_ix)) = -_$((_glo_decls + fixup_ix)) - 1))
   : $((_$((_glo_decls + fixup_ix + 2)) = decl))
@@ -4777,15 +6814,15 @@ _replay_glo_decls_inline() { let start $2; let end $3
   res=0
   while [ $start -lt $end ]; do
     if [ $((_$((_glo_decls + start + 1)))) = 0 ] ; then
-      defstr __str_171 "; "
-      _wrap_str_lit __t1 $__str_171
+      defstr __str_189 "; "
+      _wrap_str_lit __t1 $__str_189
       _concatenate_strings_with res $res $((_$((_glo_decls + start + 2)))) $__t1
     fi
     start=$((start + 3))
   done
   if [ $res != 0 ] ; then
-    defstr __str_171 "; "
-    _wrap_str_lit __t1 $__str_171
+    defstr __str_189 "; "
+    _wrap_str_lit __t1 $__str_189
     _string_concat res $res $__t1
   fi
   : $(($1 = res))
@@ -4936,14 +6973,14 @@ _format_special_var() { let ident $2; let prefixed_with_dollar $3
   let i; let op; let __t1; let __t2
   _get_op op $ident
   if [ $op = $_IDENTIFIER_INTERNAL ] ; then
-    defstr __str_172 "__t"
-    _wrap_str_lit __t1 $__str_172
+    defstr __str_190 "__t"
+    _wrap_str_lit __t1 $__str_190
     _get_val __t2 $ident
     _wrap_int __t2 $__t2
     _string_concat $1 $__t1 $__t2
   elif [ $op = $_IDENTIFIER_STRING ] ; then
-    defstr __str_173 "__str_"
-    _wrap_str_lit __t1 $__str_173
+    defstr __str_191 "__str_"
+    _wrap_str_lit __t1 $__str_191
     _get_val __t2 $ident
     _wrap_int __t2 $__t2
     _string_concat $1 $__t1 $__t2
@@ -4961,15 +6998,15 @@ _format_special_var() { let ident $2; let prefixed_with_dollar $3
         _wrap_int __t1 $i
         _string_concat $1 $((-__DOLLAR__)) $__t1
       else
-        defstr __str_174 "\${"
-        _wrap_str_lit __t1 $__str_174
+        defstr __str_192 "\${"
+        _wrap_str_lit __t1 $__str_192
         _wrap_int __t2 $i
         _string_concat3 $1 $__t1 $__t2 $((-__RBRACE__))
       fi
     fi
   else
-    defstr __str_175 "format_special_var: unknown identifier type"
-    _fatal_error __ $__str_175
+    defstr __str_193 "format_special_var: unknown identifier type"
+    _fatal_error __ $__str_193
     : $(($1 = 0))
   fi
   endlet $1 __t2 __t1 op i prefixed_with_dollar ident
@@ -4986,8 +7023,8 @@ _global_var() { let ident_symbol $2
 : $((ident_symbol = 0))
 _local_var() { let ident_symbol $2
   if [ $ident_symbol = $_ARGV_ID ] ; then
-    defstr __str_88 "argv_"
-    _wrap_str_lit $1 $__str_88
+    defstr __str_89 "argv_"
+    _wrap_str_lit $1 $__str_89
   else
     _wrap_str_pool $1 $ident_symbol
   fi
@@ -5029,8 +7066,8 @@ _env_var_with_prefix() { let ident $2; let prefixed_with_dollar $3
 : $((__t2 = __t1 = member_name_ident = 0))
 _struct_member_var() { let member_name_ident $2
   let __t1; let __t2
-  defstr __str_176 "__"
-  _wrap_str_lit __t1 $__str_176
+  defstr __str_194 "__"
+  _wrap_str_lit __t1 $__str_194
   _get_val __t2 $member_name_ident
   _wrap_str_pool __t2 $__t2
   _string_concat $1 $__t1 $__t2
@@ -5040,8 +7077,8 @@ _struct_member_var() { let member_name_ident $2
 : $((__t2 = __t1 = struct_name_ident = 0))
 _struct_sizeof_var() { let struct_name_ident $2
   let __t1; let __t2
-  defstr __str_177 "__sizeof__"
-  _wrap_str_lit __t1 $__str_177
+  defstr __str_195 "__sizeof__"
+  _wrap_str_lit __t1 $__str_195
   _get_val __t2 $struct_name_ident
   _wrap_str_pool __t2 $__t2
   _string_concat $1 $__t1 $__t2
@@ -5101,8 +7138,8 @@ _add_var_to_local_env() { let decl $2; let kind $3
   _get_child __t1 $decl 0
   _get_val ident_symbol $__t1
   if _cgc_lookup_var __t1 $ident_symbol $_cgc_locals; [ $__t1 != 0 ] ; then
-    defstr __str_178 "Local variable shadowing is not supported."
-    _fatal_error __ $__str_178
+    defstr __str_196 "Local variable shadowing is not supported."
+    _fatal_error __ $__str_196
   fi
   _get_child __t1 $decl 1
   _cgc_add_local_var __ $kind $ident_symbol $__t1
@@ -5117,22 +7154,22 @@ _assert_var_decl_is_safe() { let variable $2; let local $3
   _symbol_buf name $ident_symbol
   _get_child type $variable 1
   if [ $((_$((name + 0)))) = $__UNDERSCORE__ ] ; then
-    defstr __str_179 "variable name is invalid. It can't start with '_'."
-    _fatal_error __ $__str_179
+    defstr __str_197 "variable name is invalid. It can't start with '_'."
+    _fatal_error __ $__str_197
   fi
   if [ $local != 0 ] && { [ $ident_symbol = $_ARGV__ID ] || [ $ident_symbol = $_ENV_ID ] || [ $ident_symbol = $_HOME_ID ] || [ $ident_symbol = $_IFS_ID ] || [ $ident_symbol = $_LANG_ID ] || [ $ident_symbol = $_LC_ALL_ID ] || [ $ident_symbol = $_LC_COLLATE_ID ] || [ $ident_symbol = $_LC_CTYPE_ID ] || [ $ident_symbol = $_LC_MESSAGES_ID ] || [ $ident_symbol = $_LINENO_ID ] || [ $ident_symbol = $_NLSPATH_ID ] || [ $ident_symbol = $_PATH_ID ] || [ $ident_symbol = $_PPID_ID ] || [ $ident_symbol = $_PS1_ID ] || [ $ident_symbol = $_PS4_ID ] || [ $ident_symbol = $_PWD_ID ]; } ; then
-    defstr __str_180 "variable name is reserved by the shell and can't be used as a local variable."
-    _fatal_error __ $__str_180
+    defstr __str_198 "variable name is reserved by the shell and can't be used as a local variable."
+    _fatal_error __ $__str_198
   fi
   if [ $local != 0 ] ; then
     if { _get_op __t1 $type; [ $__t1 = $__LBRACK__ ]; } || { _get_op __t1 $type; [ $__t1 = $_STRUCT_KW ]; } ; then
-      defstr __str_181 "local array/struct value type is not supported for shell backend. Use a reference type instead."
-      _fatal_error __ $__str_181
+      defstr __str_199 "local array/struct value type is not supported for shell backend. Use a reference type instead."
+      _fatal_error __ $__str_199
     fi
   else
     if { { _get_op __t1 $type; [ $__t1 = $__LBRACK__ ]; } && { _get_child __t1 $type 0; _get_op __t1 $__t1; [ $__t1 = $__LBRACK__ ]; }; } || { { _get_op __t1 $type; [ $__t1 = $__LBRACK__ ]; } && { _get_child __t1 $type 0; _get_op __t1 $__t1; [ $__t1 = $_STRUCT_KW ]; }; } || { _get_op __t1 $type; [ $__t1 = $_STRUCT_KW ]; } ; then
-      defstr __str_182 "global array of struct and struct value type are not supported in shell backend. Use a reference type instead."
-      _fatal_error __ $__str_182
+      defstr __str_200 "global array of struct and struct value type are not supported in shell backend. Use a reference type instead."
+      _fatal_error __ $__str_200
     fi
   fi
   endlet $1 __t1 type name ident_symbol local variable
@@ -5155,10 +7192,10 @@ _let_params() { let params $2
   let ident; let decl; let res; let params_ix; let let_str; let sep_str; let __t1; let __t2
   res=0
   params_ix=2
-  defstr __str_183 "let "
-  _wrap_str_lit let_str $__str_183
-  defstr __str_171 "; "
-  _wrap_str_lit sep_str $__str_171
+  defstr __str_201 "let "
+  _wrap_str_lit let_str $__str_201
+  defstr __str_189 "; "
+  _wrap_str_lit sep_str $__str_189
   while [ $params != 0 ]; do
     _car decl $params
     if _get_child __t1 $decl 1; _is_constant_type __t1 $__t1; [ $((!__t1)) != 0 ] ; then
@@ -5186,10 +7223,10 @@ _save_local_vars() {
   let env; let ident; let counter; let let_str; let sep_str; let res; let __t1
   env=$_cgc_locals_fun
   counter=$_fun_gensym_ix
-  defstr __str_183 "let "
-  _wrap_str_lit let_str $__str_183
-  defstr __str_171 "; "
-  _wrap_str_lit sep_str $__str_171
+  defstr __str_201 "let "
+  _wrap_str_lit let_str $__str_201
+  defstr __str_189 "; "
+  _wrap_str_lit sep_str $__str_189
   res=0
   while [ $counter -gt 0 ]; do
     _new_fresh_ident ident $counter
@@ -5234,8 +7271,8 @@ _restore_local_vars() { let params_count $2
   done
   if [ $res != 0 ] ; then
     _runtime_use_local_vars=1
-    defstr __str_184 "endlet \$1 "
-    _wrap_str_lit __t1 $__str_184
+    defstr __str_202 "endlet \$1 "
+    _wrap_str_lit __t1 $__str_202
     _string_concat $1 $__t1 $res
   else
     : $(($1 = 0))
@@ -5248,62 +7285,62 @@ _op_to_str() { let op $2
   if [ 32 -lt $op ] && [ $op -lt 127 ] ; then
     _string_concat3 $1 $((-__SPACE__)) $((- op)) $((-__SPACE__))
   elif [ $op = $_AMP_AMP ] ; then
-    defstr __str_185 " && "
-    _wrap_str_lit $1 $__str_185
+    defstr __str_203 " && "
+    _wrap_str_lit $1 $__str_203
   elif [ $op = $_AMP_EQ ] ; then
-    defstr __str_186 " &= "
-    _wrap_str_lit $1 $__str_186
+    defstr __str_204 " &= "
+    _wrap_str_lit $1 $__str_204
   elif [ $op = $_BAR_BAR ] ; then
-    defstr __str_187 " || "
-    _wrap_str_lit $1 $__str_187
+    defstr __str_205 " || "
+    _wrap_str_lit $1 $__str_205
   elif [ $op = $_BAR_EQ ] ; then
-    defstr __str_188 " |= "
-    _wrap_str_lit $1 $__str_188
+    defstr __str_206 " |= "
+    _wrap_str_lit $1 $__str_206
   elif [ $op = $_CARET_EQ ] ; then
-    defstr __str_189 " ^= "
-    _wrap_str_lit $1 $__str_189
+    defstr __str_207 " ^= "
+    _wrap_str_lit $1 $__str_207
   elif [ $op = $_EQ_EQ ] ; then
-    defstr __str_190 " == "
-    _wrap_str_lit $1 $__str_190
+    defstr __str_208 " == "
+    _wrap_str_lit $1 $__str_208
   elif [ $op = $_GT_EQ ] ; then
-    defstr __str_191 " >= "
-    _wrap_str_lit $1 $__str_191
+    defstr __str_209 " >= "
+    _wrap_str_lit $1 $__str_209
   elif [ $op = $_LSHIFT_EQ ] ; then
-    defstr __str_192 " <<= "
-    _wrap_str_lit $1 $__str_192
+    defstr __str_210 " <<= "
+    _wrap_str_lit $1 $__str_210
   elif [ $op = $_LT_EQ ] ; then
-    defstr __str_193 " <= "
-    _wrap_str_lit $1 $__str_193
+    defstr __str_211 " <= "
+    _wrap_str_lit $1 $__str_211
   elif [ $op = $_LSHIFT ] ; then
-    defstr __str_194 " << "
-    _wrap_str_lit $1 $__str_194
+    defstr __str_212 " << "
+    _wrap_str_lit $1 $__str_212
   elif [ $op = $_MINUS_EQ ] ; then
-    defstr __str_195 " -= "
-    _wrap_str_lit $1 $__str_195
+    defstr __str_213 " -= "
+    _wrap_str_lit $1 $__str_213
   elif [ $op = $_EXCL_EQ ] ; then
-    defstr __str_196 " != "
-    _wrap_str_lit $1 $__str_196
+    defstr __str_214 " != "
+    _wrap_str_lit $1 $__str_214
   elif [ $op = $_PERCENT_EQ ] ; then
-    defstr __str_197 " %= "
-    _wrap_str_lit $1 $__str_197
+    defstr __str_215 " %= "
+    _wrap_str_lit $1 $__str_215
   elif [ $op = $_PLUS_EQ ] ; then
-    defstr __str_198 " += "
-    _wrap_str_lit $1 $__str_198
+    defstr __str_216 " += "
+    _wrap_str_lit $1 $__str_216
   elif [ $op = $_RSHIFT_EQ ] ; then
-    defstr __str_199 " >>= "
-    _wrap_str_lit $1 $__str_199
+    defstr __str_217 " >>= "
+    _wrap_str_lit $1 $__str_217
   elif [ $op = $_RSHIFT ] ; then
-    defstr __str_200 " >> "
-    _wrap_str_lit $1 $__str_200
+    defstr __str_218 " >> "
+    _wrap_str_lit $1 $__str_218
   elif [ $op = $_SLASH_EQ ] ; then
-    defstr __str_201 " /= "
-    _wrap_str_lit $1 $__str_201
+    defstr __str_219 " /= "
+    _wrap_str_lit $1 $__str_219
   elif [ $op = $_STAR_EQ ] ; then
-    defstr __str_202 " *= "
-    _wrap_str_lit $1 $__str_202
+    defstr __str_220 " *= "
+    _wrap_str_lit $1 $__str_220
   else
-    defstr __str_203 "op_to_str: unexpected operator"
-    _fatal_error __ $__str_203
+    defstr __str_221 "op_to_str: unexpected operator"
+    _fatal_error __ $__str_221
     : $(($1 = 0))
   fi
   endlet $1 op
@@ -5312,26 +7349,26 @@ _op_to_str() { let op $2
 : $((op = 0))
 _test_op_to_str() { let op $2
   if [ $op = $_EQ_EQ ] ; then
-    defstr __str_204 " = "
-    _wrap_str_lit $1 $__str_204
+    defstr __str_222 " = "
+    _wrap_str_lit $1 $__str_222
   elif [ $op = $_EXCL_EQ ] ; then
-    defstr __str_196 " != "
-    _wrap_str_lit $1 $__str_196
+    defstr __str_214 " != "
+    _wrap_str_lit $1 $__str_214
   elif [ $op = $__LT__ ] ; then
-    defstr __str_205 " -lt "
-    _wrap_str_lit $1 $__str_205
+    defstr __str_223 " -lt "
+    _wrap_str_lit $1 $__str_223
   elif [ $op = $__GT__ ] ; then
-    defstr __str_206 " -gt "
-    _wrap_str_lit $1 $__str_206
+    defstr __str_224 " -gt "
+    _wrap_str_lit $1 $__str_224
   elif [ $op = $_LT_EQ ] ; then
-    defstr __str_207 " -le "
-    _wrap_str_lit $1 $__str_207
+    defstr __str_225 " -le "
+    _wrap_str_lit $1 $__str_225
   elif [ $op = $_GT_EQ ] ; then
-    defstr __str_208 " -ge "
-    _wrap_str_lit $1 $__str_208
+    defstr __str_226 " -ge "
+    _wrap_str_lit $1 $__str_226
   else
-    defstr __str_209 "test_op_to_str: unexpected operator"
-    _fatal_error __ $__str_209
+    defstr __str_227 "test_op_to_str: unexpected operator"
+    _fatal_error __ $__str_227
     : $(($1 = 0))
   fi
   endlet $1 op
@@ -5346,28 +7383,28 @@ _character_ident() { let c $2
   if { [ $__A__ -le $c ] && [ $c -le $__Z__ ]; } || { [ $__a__ -le $c ] && [ $c -le $__z__ ]; } || { [ $__0__ -le $c ] && [ $c -le $__9__ ]; } ; then
     res=$((- c))
   elif [ $c -lt 32 ] ; then
-    defstr __str_210 "NUL\0SOH\0STX\0ETX\0EOT\0ENQ\0ACK\0BEL\0BS\0\0HT\0\0LF\0\0VT\0\0FF\0\0CR\0\0SO\0\0SI\0\0DLE\0DC1\0DC2\0DC3\0DC4\0NAK\0SYN\0ETB\0CAN\0EM\0\0SUB\0ESC\0FS\0\0GS\0\0RS\0\0US\0\0"
-    str=$__str_210
+    defstr __str_228 "NUL\0SOH\0STX\0ETX\0EOT\0ENQ\0ACK\0BEL\0BS\0\0HT\0\0LF\0\0VT\0\0FF\0\0CR\0\0SO\0\0SI\0\0DLE\0DC1\0DC2\0DC3\0DC4\0NAK\0SYN\0ETB\0CAN\0EM\0\0SUB\0ESC\0FS\0\0GS\0\0RS\0\0US\0\0"
+    str=$__str_228
     _wrap_str_lit res $((str + (c * 4)))
   elif [ $c -lt $__0__ ] ; then
-    defstr __str_211 "SPACE\0\0\0EXCL\0\0\0\0DQUOTE\0\0HASH\0\0\0\0DOLLAR\0\0PERCENT\0AMP\0\0\0\0\0QUOTE\0\0\0LPAREN\0\0RPAREN\0\0STAR\0\0\0\0PLUS\0\0\0\0COMMA\0\0\0MINUS\0\0\0PERIOD\0\0SLASH\0\0\0"
-    str=$__str_211
+    defstr __str_229 "SPACE\0\0\0EXCL\0\0\0\0DQUOTE\0\0HASH\0\0\0\0DOLLAR\0\0PERCENT\0AMP\0\0\0\0\0QUOTE\0\0\0LPAREN\0\0RPAREN\0\0STAR\0\0\0\0PLUS\0\0\0\0COMMA\0\0\0MINUS\0\0\0PERIOD\0\0SLASH\0\0\0"
+    str=$__str_229
     _wrap_str_lit res $((str + ((c - __SPACE__) * 8)))
   elif [ $c -le $__A__ ] ; then
-    defstr __str_212 "COLON\0\0\0\0\0SEMICOLON\0LT\0\0\0\0\0\0\0\0EQ\0\0\0\0\0\0\0\0GT\0\0\0\0\0\0\0\0QUESTION\0\0AT\0\0\0\0\0\0\0\0"
-    str=$__str_212
+    defstr __str_230 "COLON\0\0\0\0\0SEMICOLON\0LT\0\0\0\0\0\0\0\0EQ\0\0\0\0\0\0\0\0GT\0\0\0\0\0\0\0\0QUESTION\0\0AT\0\0\0\0\0\0\0\0"
+    str=$__str_230
     _wrap_str_lit res $((str + ((c - __COLON__) * 10)))
   elif [ $c -le $__a__ ] ; then
-    defstr __str_213 "LBRACK\0\0\0\0\0BACKSLASH\0\0RBRACK\0\0\0\0\0CARET\0\0\0\0\0\0UNDERSCORE\0BACKTICK\0\0\0"
-    str=$__str_213
+    defstr __str_231 "LBRACK\0\0\0\0\0BACKSLASH\0\0RBRACK\0\0\0\0\0CARET\0\0\0\0\0\0UNDERSCORE\0BACKTICK\0\0\0"
+    str=$__str_231
     _wrap_str_lit res $((str + ((c - __LBRACK__) * 11)))
   elif [ $c -le 127 ] ; then
-    defstr __str_214 "LBRACE\0BAR\0\0\0\0RBRACE\0TILDE\0\0DEL\0\0\0\0"
-    str=$__str_214
+    defstr __str_232 "LBRACE\0BAR\0\0\0\0RBRACE\0TILDE\0\0DEL\0\0\0\0"
+    str=$__str_232
     _wrap_str_lit res $((str + ((c - __LBRACE__) * 7)))
   else
-    defstr __str_215 "character_ident: invalid character"
-    _fatal_error __ $__str_215
+    defstr __str_233 "character_ident: invalid character"
+    _fatal_error __ $__str_233
   fi
   _string_concat5 $1 $((-__UNDERSCORE__)) $((-__UNDERSCORE__)) $res $((-__UNDERSCORE__)) $((-__UNDERSCORE__))
   endlet $1 str res c
@@ -5434,7 +7471,7 @@ _handle_side_effects_go() { let node $2; let executes_conditionally $3
     _get_child child2 $node 2
   fi
   if [ $nb_children = 0 ] ; then
-    if [ $op = $_IDENTIFIER ] || [ $op = $_IDENTIFIER_INTERNAL ] || [ $op = $_IDENTIFIER_STRING ] || [ $op = $_IDENTIFIER_DOLLAR ] || [ $op = $_CHARACTER ] || [ $op = $_INTEGER ] || [ $op = $_INTEGER_HEX ] || [ $op = $_INTEGER_OCT ] ; then
+    if [ $op = $_IDENTIFIER ] || [ $op = $_IDENTIFIER_INTERNAL ] || [ $op = $_IDENTIFIER_STRING ] || [ $op = $_IDENTIFIER_DOLLAR ] || [ $op = $_CHARACTER ] || [ $op = $_INTEGER ] || [ $op = $_DOUBLE_LIT ] || [ $op = $_INTEGER_HEX ] || [ $op = $_INTEGER_OCT ] ; then
       : $(($1 = node))
     elif [ $op = $_STRING ] ; then
       _get_val __t1 $node
@@ -5450,8 +7487,8 @@ _handle_side_effects_go() { let node $2; let executes_conditionally $3
       _literals_inits_tail=$sub1
       : $(($1 = sub2))
     else
-      defstr __str_216 "unexpected operator"
-      _fatal_error __ $__str_216
+      defstr __str_234 "unexpected operator"
+      _fatal_error __ $__str_234
       : $(($1 = 0))
     fi
   elif [ $nb_children = 1 ] ; then
@@ -5465,8 +7502,8 @@ _handle_side_effects_go() { let node $2; let executes_conditionally $3
     elif [ $op = $_SIZEOF_KW ] ; then
       : $(($1 = node))
     else
-      defstr __str_216 "unexpected operator"
-      _fatal_error __ $__str_216
+      defstr __str_234 "unexpected operator"
+      _fatal_error __ $__str_234
       : $(($1 = 0))
     fi
   elif [ $nb_children = 2 ] ; then
@@ -5505,8 +7542,8 @@ _handle_side_effects_go() { let node $2; let executes_conditionally $3
       _handle_side_effects_go __t1 $child1 $executes_conditionally
       _new_ast2 $1 $_CAST $child0 $__t1
     else
-      defstr __str_216 "unexpected operator"
-      _fatal_error __ $__str_216
+      defstr __str_234 "unexpected operator"
+      _fatal_error __ $__str_234
       : $(($1 = 0))
     fi
   elif [ $nb_children = 3 ] && [ $op = $__QUESTION__ ] ; then
@@ -5518,14 +7555,14 @@ _handle_side_effects_go() { let node $2; let executes_conditionally $3
     _handle_side_effects_go sub2 $child2 1
     right_conditional_fun_calls=$_conditional_fun_calls
     if [ $left_conditional_fun_calls != 0 ] || [ $right_conditional_fun_calls != 0 ] ; then
-      defstr __str_217 "Conditional function calls in ternary operator not allowed"
-      _fatal_error __ $__str_217
+      defstr __str_235 "Conditional function calls in ternary operator not allowed"
+      _fatal_error __ $__str_235
     fi
     _handle_side_effects_go __t1 $child0 $executes_conditionally
     _new_ast3 $1 $__QUESTION__ $__t1 $sub1 $sub2
   else
-    defstr __str_216 "unexpected operator"
-    _fatal_error __ $__str_216
+    defstr __str_234 "unexpected operator"
+    _fatal_error __ $__str_234
     : $(($1 = 0))
   fi
   endlet $1 __t1 child2 child1 child0 start_gensym_ix right_conditional_fun_calls left_conditional_fun_calls previous_conditional_fun_calls sub2 sub1 nb_children op executes_conditionally node
@@ -5556,11 +7593,11 @@ _comp_defstr() { let ident $2; let string_symbol $3; let array_size $4
   else
     _runtime_use_defstr=1
   fi
-  defstr __str_218 "defstr "
-  defstr __str_219 " \""
-  _wrap_str_lit __t1 $__str_218
+  defstr __str_236 "defstr "
+  defstr __str_237 " \""
+  _wrap_str_lit __t1 $__str_236
   _env_var_with_prefix __t2 $ident 0
-  _wrap_str_lit __t3 $__str_219
+  _wrap_str_lit __t3 $__str_237
   _wrap_str_imm __t4 $string_start $string_end
   _escape_text __t4 $__t4 0
   _string_concat3 __t3 $__t3 $__t4 $((-__DQUOTE__))
@@ -5593,6 +7630,9 @@ _comp_initializer_list() { let initializer_list $2; let expected_len $3
       _get_val __t1 $element
       _wrap_int __t1 $((-__t1))
       _concatenate_strings_with args $args $__t1 $((-__SPACE__))
+    elif [ $op = $_DOUBLE_LIT ] ; then
+      _fl_lit_text __t1 $element
+      _concatenate_strings_with args $args $__t1 $((-__SPACE__))
     elif [ $op = $_CHARACTER ] ; then
       _get_val __t1 $element
       _wrap_int __t1 $__t1
@@ -5606,8 +7646,8 @@ _comp_initializer_list() { let initializer_list $2; let expected_len $3
       _string_concat __t1 $((-__DOLLAR__)) $__t1
       _concatenate_strings_with args $args $__t1 $((-__SPACE__))
     else
-      defstr __str_220 "comp_initializer: unexpected operator"
-      _fatal_error __ $__str_220
+      defstr __str_238 "comp_initializer: unexpected operator"
+      _fatal_error __ $__str_238
     fi
     _cdr initializer_list $initializer_list
   done
@@ -5629,16 +7669,16 @@ _with_prefixed_side_effects() { let test_side_effects $2; let code $3
     _get_child __t1 $side_effect 1
     _get_child __t2 $side_effect 0
     _comp_fun_call_code __t1 $__t1 $__t2
-    defstr __str_171 "; "
-    _wrap_str_lit __t2 $__str_171
+    defstr __str_189 "; "
+    _wrap_str_lit __t2 $__str_189
     _string_concat3 test_side_effects_code $test_side_effects_code $__t1 $__t2
     _cdr test_side_effects $test_side_effects
   done
   if [ $test_side_effects_code != 0 ] ; then
-    defstr __str_221 "{ "
-    _wrap_str_lit __t1 $__str_221
-    defstr __str_222 "; }"
-    _wrap_str_lit __t2 $__str_222
+    defstr __str_239 "{ "
+    _wrap_str_lit __t1 $__str_239
+    defstr __str_240 "; }"
+    _wrap_str_lit __t2 $__str_240
     _string_concat4 $1 $__t1 $test_side_effects_code $code $__t2
   else
     : $(($1 = code))
@@ -5662,17 +7702,17 @@ _wrap_if_needed() { let parens_otherwise $2; let context $3; let test_side_effec
       : $(($1 = code))
     fi
   elif [ $context = $_RVALUE_CTX_TEST ] ; then
-    defstr __str_223 "[ \$(("
-    defstr __str_224 ")) != 0 ]"
-    _wrap_str_lit __t1 $__str_223
-    _wrap_str_lit __t2 $__str_224
+    defstr __str_241 "[ \$(("
+    defstr __str_242 ")) != 0 ]"
+    _wrap_str_lit __t1 $__str_241
+    _wrap_str_lit __t2 $__str_242
     _string_concat3 __t1 $__t1 $code $__t2
     _with_prefixed_side_effects $1 $test_side_effects $__t1
   else
-    defstr __str_225 "\$(("
-    _wrap_str_lit __t1 $__str_225
-    defstr __str_226 "))"
-    _wrap_str_lit __t2 $__str_226
+    defstr __str_243 "\$(("
+    _wrap_str_lit __t1 $__str_243
+    defstr __str_244 "))"
+    _wrap_str_lit __t2 $__str_244
     _string_concat3 $1 $__t1 $code $__t2
   fi
   endlet $1 __t2 __t1 inner_op outer_op code test_side_effects context parens_otherwise
@@ -5682,10 +7722,10 @@ _wrap_if_needed() { let parens_otherwise $2; let context $3; let test_side_effec
 _wrap_in_condition_if_needed() { let context $2; let test_side_effects $3; let code $4
   let __t1; let __t2
   if [ $context = $_RVALUE_CTX_TEST ] ; then
-    defstr __str_227 "[ "
-    defstr __str_228 " != 0 ]"
-    _wrap_str_lit __t1 $__str_227
-    _wrap_str_lit __t2 $__str_228
+    defstr __str_245 "[ "
+    defstr __str_246 " != 0 ]"
+    _wrap_str_lit __t1 $__str_245
+    _wrap_str_lit __t2 $__str_246
     _string_concat3 __t1 $__t1 $code $__t2
     _with_prefixed_side_effects $1 $test_side_effects $__t1
   else
@@ -5729,6 +7769,9 @@ _comp_rvalue_go() { let node $2; let context $3; let test_side_effects $4; let o
         _string_concat __t1 $((-__DOLLAR__)) $__t1
         _wrap_in_condition_if_needed $1 $context $test_side_effects $__t1
       fi
+    elif [ $op = $_DOUBLE_LIT ] ; then
+      _fl_lit_text __t1 $node
+      _wrap_in_condition_if_needed $1 $context $test_side_effects $__t1
     elif [ $op = $_IDENTIFIER ] || [ $op = $_IDENTIFIER_INTERNAL ] || [ $op = $_IDENTIFIER_STRING ] || [ $op = $_IDENTIFIER_DOLLAR ] ; then
       if [ $context = $_RVALUE_CTX_ARITH_EXPANSION ] ; then
         _env_var_with_prefix $1 $node 0
@@ -5738,8 +7781,8 @@ _comp_rvalue_go() { let node $2; let context $3; let test_side_effects $4; let o
         _wrap_in_condition_if_needed $1 $context $test_side_effects $__t1
       fi
     else
-      defstr __str_229 "comp_rvalue_go: unexpected operator"
-      _fatal_error __ $__str_229
+      defstr __str_247 "comp_rvalue_go: unexpected operator"
+      _fatal_error __ $__str_247
       : $(($1 = 0))
     fi
   elif [ $nb_children = 1 ] ; then
@@ -5764,37 +7807,37 @@ _comp_rvalue_go() { let node $2; let context $3; let test_side_effects $4; let o
       fi
     elif [ $op = $_MINUS_MINUS_PRE ] ; then
       _comp_lvalue sub1 $child0
-      defstr __str_230 " -= 1"
-      _wrap_str_lit __t1 $__str_230
+      defstr __str_248 " -= 1"
+      _wrap_str_lit __t1 $__str_248
       _string_concat __t1 $sub1 $__t1
       _wrap_if_needed $1 1 $context $test_side_effects $__t1 $outer_op $op
     elif [ $op = $_PLUS_PLUS_PRE ] ; then
       _comp_lvalue sub1 $child0
-      defstr __str_231 " += 1"
-      _wrap_str_lit __t1 $__str_231
+      defstr __str_249 " += 1"
+      _wrap_str_lit __t1 $__str_249
       _string_concat __t1 $sub1 $__t1
       _wrap_if_needed $1 1 $context $test_side_effects $__t1 $outer_op $op
     elif [ $op = $_MINUS_MINUS_POST ] ; then
       _comp_lvalue sub1 $child0
-      defstr __str_232 " -= 1)"
-      defstr __str_233 " + 1"
-      _wrap_str_lit __t1 $__str_232
-      _wrap_str_lit __t2 $__str_233
+      defstr __str_250 " -= 1)"
+      defstr __str_251 " + 1"
+      _wrap_str_lit __t1 $__str_250
+      _wrap_str_lit __t2 $__str_251
       _string_concat4 __t1 $((-__LPAREN__)) $sub1 $__t1 $__t2
       _wrap_if_needed $1 0 $context $test_side_effects $__t1 $outer_op $__PLUS__
     elif [ $op = $_PLUS_PLUS_POST ] ; then
       _comp_lvalue sub1 $child0
-      defstr __str_234 " += 1)"
-      defstr __str_235 " - 1"
-      _wrap_str_lit __t1 $__str_234
-      _wrap_str_lit __t2 $__str_235
+      defstr __str_252 " += 1)"
+      defstr __str_253 " - 1"
+      _wrap_str_lit __t1 $__str_252
+      _wrap_str_lit __t2 $__str_253
       _string_concat4 __t1 $((-__LPAREN__)) $sub1 $__t1 $__t2
       _wrap_if_needed $1 0 $context $test_side_effects $__t1 $outer_op $__MINUS__
     elif [ $op = $_SIZEOF_KW ] ; then
       if _get_op __t1 $child0; [ $__t1 = $_DECL ] ; then
         _get_child child0 $child0 1
         _get_op op $child0
-        if [ $op = $_INT_KW ] || [ $op = $_SHORT_KW ] || [ $op = $_LONG_KW ] || [ $op = $_CHAR_KW ] || [ $op = $_VOID_KW ] || [ $op = $_ENUM_KW ] || [ $op = $__STAR__ ] ; then
+        if [ $op = $_INT_KW ] || [ $op = $_SHORT_KW ] || [ $op = $_LONG_KW ] || [ $op = $_CHAR_KW ] || [ $op = $_VOID_KW ] || [ $op = $_DOUBLE_KW ] || [ $op = $_FLOAT_KW ] || [ $op = $_ENUM_KW ] || [ $op = $__STAR__ ] ; then
           _wrap_int __t1 1
           _wrap_in_condition_if_needed $1 $context $test_side_effects $__t1
         elif [ $op = $_STRUCT_KW ] ; then
@@ -5802,21 +7845,21 @@ _comp_rvalue_go() { let node $2; let context $3; let test_side_effects $4; let o
           _struct_sizeof_var __t1 $__t1
           _wrap_if_needed $1 0 $context $test_side_effects $__t1 $outer_op $op
         else
-          defstr __str_236 "comp_rvalue_go: sizeof is not supported for this type or expression"
-          _fatal_error __ $__str_236
+          defstr __str_254 "comp_rvalue_go: sizeof is not supported for this type or expression"
+          _fatal_error __ $__str_254
           : $(($1 = 0))
         fi
       else
-        defstr __str_236 "comp_rvalue_go: sizeof is not supported for this type or expression"
-        _fatal_error __ $__str_236
+        defstr __str_254 "comp_rvalue_go: sizeof is not supported for this type or expression"
+        _fatal_error __ $__str_254
         : $(($1 = 0))
       fi
     elif [ $op = $__AMP__ ] ; then
       _comp_lvalue_address __t1 $child0
       _wrap_if_needed $1 0 $context $test_side_effects $__t1 $outer_op $op
     else
-      defstr __str_229 "comp_rvalue_go: unexpected operator"
-      _fatal_error __ $__str_229
+      defstr __str_247 "comp_rvalue_go: unexpected operator"
+      _fatal_error __ $__str_247
       : $(($1 = 0))
     fi
   elif [ $nb_children = 2 ] ; then
@@ -5835,34 +7878,34 @@ _comp_rvalue_go() { let node $2; let context $3; let test_side_effects $4; let o
     elif [ $op = $__LBRACK__ ] ; then
       _comp_rvalue_go sub1 $child0 $_RVALUE_CTX_ARITH_EXPANSION 0 $__PLUS__
       _comp_rvalue_go sub2 $child1 $_RVALUE_CTX_ARITH_EXPANSION 0 $__PLUS__
-      defstr __str_237 "_\$(("
-      defstr __str_238 " + "
-      defstr __str_226 "))"
-      _wrap_str_lit __t1 $__str_237
-      _wrap_str_lit __t2 $__str_238
-      _wrap_str_lit __t3 $__str_226
+      defstr __str_255 "_\$(("
+      defstr __str_256 " + "
+      defstr __str_244 "))"
+      _wrap_str_lit __t1 $__str_255
+      _wrap_str_lit __t2 $__str_256
+      _wrap_str_lit __t3 $__str_244
       _string_concat5 __t1 $__t1 $sub1 $__t2 $sub2 $__t3
       _wrap_if_needed $1 0 $context $test_side_effects $__t1 $outer_op $op
     elif [ $op = $_ARROW ] ; then
       _comp_rvalue_go sub1 $child0 $_RVALUE_CTX_ARITH_EXPANSION 0 $op
       _struct_member_var sub2 $child1
-      defstr __str_237 "_\$(("
-      defstr __str_238 " + "
-      defstr __str_226 "))"
-      _wrap_str_lit __t1 $__str_237
-      _wrap_str_lit __t2 $__str_238
-      _wrap_str_lit __t3 $__str_226
+      defstr __str_255 "_\$(("
+      defstr __str_256 " + "
+      defstr __str_244 "))"
+      _wrap_str_lit __t1 $__str_255
+      _wrap_str_lit __t2 $__str_256
+      _wrap_str_lit __t3 $__str_244
       _string_concat5 __t1 $__t1 $sub1 $__t2 $sub2 $__t3
       _wrap_if_needed $1 0 $context $test_side_effects $__t1 $outer_op $op
     elif [ $op = $_EQ_EQ ] || [ $op = $_EXCL_EQ ] || [ $op = $_LT_EQ ] || [ $op = $_GT_EQ ] || [ $op = $__LT__ ] || [ $op = $__GT__ ] ; then
       if [ $context = $_RVALUE_CTX_TEST ] ; then
         _comp_rvalue_go sub1 $child0 $_RVALUE_CTX_BASE 0 $op
         _comp_rvalue_go sub2 $child1 $_RVALUE_CTX_BASE 0 $op
-        defstr __str_227 "[ "
-        defstr __str_239 " ]"
-        _wrap_str_lit __t1 $__str_227
+        defstr __str_245 "[ "
+        defstr __str_257 " ]"
+        _wrap_str_lit __t1 $__str_245
         _test_op_to_str __t2 $op
-        _wrap_str_lit __t3 $__str_239
+        _wrap_str_lit __t3 $__str_257
         _string_concat5 __t1 $__t1 $sub1 $__t2 $sub2 $__t3
         _with_prefixed_side_effects $1 $test_side_effects $__t1
       else
@@ -5875,37 +7918,37 @@ _comp_rvalue_go() { let node $2; let context $3; let test_side_effects $4; let o
     elif [ $op = $_CAST ] ; then
       _comp_rvalue_go $1 $child1 $context 0 $op
     else
-      defstr __str_240 "comp_rvalue_go: unknown rvalue"
-      _fatal_error __ $__str_240
+      defstr __str_258 "comp_rvalue_go: unknown rvalue"
+      _fatal_error __ $__str_258
       : $(($1 = 0))
     fi
   elif [ $nb_children = 3 ] && [ $op = $__QUESTION__ ] ; then
     _comp_rvalue_go sub1 $child0 $_RVALUE_CTX_ARITH_EXPANSION 0 $op
     _comp_rvalue_go sub2 $child1 $_RVALUE_CTX_ARITH_EXPANSION 0 $op
     _comp_rvalue_go sub3 $child2 $_RVALUE_CTX_ARITH_EXPANSION 0 $op
-    defstr __str_241 " : "
+    defstr __str_259 " : "
     _op_to_str __t1 $op
-    _wrap_str_lit __t2 $__str_241
+    _wrap_str_lit __t2 $__str_259
     _string_concat5 __t1 $sub1 $__t1 $sub2 $__t2 $sub3
     _wrap_if_needed $1 1 $context $test_side_effects $__t1 $outer_op $op
   elif [ $nb_children = 4 ] && { [ $op = $_AMP_AMP ] || [ $op = $_BAR_BAR ]; } ; then
     if [ $context = $_RVALUE_CTX_TEST ] ; then
       if { { _get_op __t1 $child0; [ $__t1 = $_AMP_AMP ]; } || { _get_op __t1 $child0; [ $__t1 = $_BAR_BAR ]; }; } && { _get_op __t1 $child0; [ $__t1 != $op ]; } ; then
         _comp_rvalue_go sub1 $child0 $_RVALUE_CTX_TEST $child2 $op
-        defstr __str_221 "{ "
-        _wrap_str_lit __t1 $__str_221
-        defstr __str_222 "; }"
-        _wrap_str_lit __t2 $__str_222
+        defstr __str_239 "{ "
+        _wrap_str_lit __t1 $__str_239
+        defstr __str_240 "; }"
+        _wrap_str_lit __t2 $__str_240
         _string_concat3 sub1 $__t1 $sub1 $__t2
       else
         _comp_rvalue_go sub1 $child0 $_RVALUE_CTX_TEST $child2 $op
       fi
       if { { _get_op __t1 $child1; [ $__t1 = $_AMP_AMP ]; } || { _get_op __t1 $child1; [ $__t1 = $_BAR_BAR ]; }; } && { _get_op __t1 $child1; [ $__t1 != $op ]; } ; then
         _comp_rvalue_go sub2 $child1 $_RVALUE_CTX_TEST $child3 $op
-        defstr __str_221 "{ "
-        _wrap_str_lit __t1 $__str_221
-        defstr __str_222 "; }"
-        _wrap_str_lit __t2 $__str_222
+        defstr __str_239 "{ "
+        _wrap_str_lit __t1 $__str_239
+        defstr __str_240 "; }"
+        _wrap_str_lit __t2 $__str_240
         _string_concat3 sub2 $__t1 $sub2 $__t2
       else
         _comp_rvalue_go sub2 $child1 $_RVALUE_CTX_TEST $child3 $op
@@ -5914,8 +7957,8 @@ _comp_rvalue_go() { let node $2; let context $3; let test_side_effects $4; let o
       _string_concat3 $1 $sub1 $__t1 $sub2
     else
       if [ $test_side_effects != 0 ] || [ $child2 != 0 ] || [ $child3 != 0 ] ; then
-        defstr __str_242 "comp_rvalue_go: && and || with function calls can only be used in tests"
-        _fatal_error __ $__str_242
+        defstr __str_260 "comp_rvalue_go: && and || with function calls can only be used in tests"
+        _fatal_error __ $__str_260
       fi
       _comp_rvalue_go sub1 $child0 $_RVALUE_CTX_ARITH_EXPANSION 0 $op
       _comp_rvalue_go sub2 $child1 $_RVALUE_CTX_ARITH_EXPANSION 0 $op
@@ -5924,8 +7967,8 @@ _comp_rvalue_go() { let node $2; let context $3; let test_side_effects $4; let o
       _wrap_if_needed $1 1 $context $test_side_effects $__t1 $outer_op $op
     fi
   else
-    defstr __str_240 "comp_rvalue_go: unknown rvalue"
-    _fatal_error __ $__str_240
+    defstr __str_258 "comp_rvalue_go: unknown rvalue"
+    _fatal_error __ $__str_258
     : $(($1 = 0))
   fi
   endlet $1 __t3 __t2 __t1 child3 child2 child1 child0 sub3 sub2 sub1 nb_children op outer_op test_side_effects context node
@@ -5973,16 +8016,16 @@ _comp_lvalue_address() { let node $2
   let op; let sub1; let sub2; let __t1
   _get_op op $node
   if [ $op = $_IDENTIFIER ] ; then
-    defstr __str_243 "comp_rvalue_go: can't take the address of variable"
-    _fatal_error __ $__str_243
+    defstr __str_261 "comp_rvalue_go: can't take the address of variable"
+    _fatal_error __ $__str_261
     : $(($1 = 0))
   elif [ $op = $__LBRACK__ ] ; then
     _get_child __t1 $node 0
     _comp_rvalue sub1 $__t1 $_RVALUE_CTX_ARITH_EXPANSION
     _get_child __t1 $node 1
     _comp_rvalue sub2 $__t1 $_RVALUE_CTX_ARITH_EXPANSION
-    defstr __str_238 " + "
-    _wrap_str_lit __t1 $__str_238
+    defstr __str_256 " + "
+    _wrap_str_lit __t1 $__str_256
     _string_concat3 $1 $sub1 $__t1 $sub2
   elif [ $op = $__STAR__ ] ; then
     _get_child __t1 $node 0
@@ -5992,15 +8035,15 @@ _comp_lvalue_address() { let node $2
     _comp_rvalue sub1 $__t1 $_RVALUE_CTX_ARITH_EXPANSION
     _get_child __t1 $node 1
     _struct_member_var sub2 $__t1
-    defstr __str_238 " + "
-    _wrap_str_lit __t1 $__str_238
+    defstr __str_256 " + "
+    _wrap_str_lit __t1 $__str_256
     _string_concat3 $1 $sub1 $__t1 $sub2
   elif [ $op = $_CAST ] ; then
     _get_child __t1 $node 1
     _comp_lvalue_address $1 $__t1
   else
-    defstr __str_244 "comp_lvalue_address: unknown lvalue"
-    _fatal_error __ $__str_244
+    defstr __str_262 "comp_lvalue_address: unknown lvalue"
+    _fatal_error __ $__str_262
     : $(($1 = 0))
   fi
   endlet $1 __t1 sub2 sub1 op node
@@ -6017,12 +8060,12 @@ _comp_lvalue() { let node $2
     _comp_rvalue sub1 $__t1 $_RVALUE_CTX_ARITH_EXPANSION
     _get_child __t1 $node 1
     _comp_rvalue sub2 $__t1 $_RVALUE_CTX_ARITH_EXPANSION
-    defstr __str_237 "_\$(("
-    _wrap_str_lit __t1 $__str_237
-    defstr __str_238 " + "
-    _wrap_str_lit __t2 $__str_238
-    defstr __str_226 "))"
-    _wrap_str_lit __t3 $__str_226
+    defstr __str_255 "_\$(("
+    _wrap_str_lit __t1 $__str_255
+    defstr __str_256 " + "
+    _wrap_str_lit __t2 $__str_256
+    defstr __str_244 "))"
+    _wrap_str_lit __t3 $__str_244
     _string_concat5 $1 $__t1 $sub1 $__t2 $sub2 $__t3
   elif [ $op = $__STAR__ ] ; then
     _get_child __t1 $node 0
@@ -6033,19 +8076,19 @@ _comp_lvalue() { let node $2
     _comp_rvalue sub1 $__t1 $_RVALUE_CTX_ARITH_EXPANSION
     _get_child __t1 $node 1
     _struct_member_var sub2 $__t1
-    defstr __str_237 "_\$(("
-    _wrap_str_lit __t1 $__str_237
-    defstr __str_238 " + "
-    _wrap_str_lit __t2 $__str_238
-    defstr __str_226 "))"
-    _wrap_str_lit __t3 $__str_226
+    defstr __str_255 "_\$(("
+    _wrap_str_lit __t1 $__str_255
+    defstr __str_256 " + "
+    _wrap_str_lit __t2 $__str_256
+    defstr __str_244 "))"
+    _wrap_str_lit __t3 $__str_244
     _string_concat5 $1 $__t1 $sub1 $__t2 $sub2 $__t3
   elif [ $op = $_CAST ] ; then
     _get_child __t1 $node 1
     _comp_lvalue $1 $__t1
   else
-    defstr __str_245 "comp_lvalue: unknown lvalue"
-    _fatal_error __ $__str_245
+    defstr __str_263 "comp_lvalue: unknown lvalue"
+    _fatal_error __ $__str_263
     : $(($1 = 0))
   fi
   endlet $1 __t3 __t2 __t1 sub2 sub1 op node
@@ -6071,8 +8114,8 @@ _comp_putchar_inline() { let param $2
   if _get_op __t1 $param; [ $__t1 = $_CHARACTER ] ; then
     _get_val c $param
     if { [ $c -ge 32 ] && [ $c -le 126 ]; } || [ $c = $__LF__ ] ; then
-      defstr __str_246 "printf \""
-      _wrap_str_lit __t1 $__str_246
+      defstr __str_264 "printf \""
+      _wrap_str_lit __t1 $__str_264
       _escape_text __t2 $((- c)) 1
       _string_concat3 $1 $__t1 $__t2 $((-__DQUOTE__))
       endlet $1 __t4 __t3 __t2 __t1 c ident res param
@@ -6082,35 +8125,35 @@ _comp_putchar_inline() { let param $2
   _comp_rvalue res $param $_RVALUE_CTX_ARITH_EXPANSION
   if [ $_contains_side_effects != 0 ] ; then
     _fresh_ident ident
-    defstr __str_247 "=\$(("
-    defstr __str_226 "))"
+    defstr __str_265 "=\$(("
+    defstr __str_244 "))"
     _comp_lvalue __t1 $ident
-    _wrap_str_lit __t2 $__str_247
-    _wrap_str_lit __t3 $__str_226
+    _wrap_str_lit __t2 $__str_265
+    _wrap_str_lit __t3 $__str_244
     _string_concat4 __t1 $__t1 $__t2 $res $__t3
     _append_glo_decl __ $__t1
     _comp_lvalue res $ident
   elif _get_op __t1 $param; [ $__t1 != $_IDENTIFIER ] ; then
     _string_concat3 res $((-__LPAREN__)) $res $((-__RPAREN__))
   fi
-  defstr __str_225 "\$(("
-  defstr __str_248 "/64))"
-  _wrap_str_lit __t1 $__str_225
-  _wrap_str_lit __t2 $__str_248
+  defstr __str_243 "\$(("
+  defstr __str_266 "/64))"
+  _wrap_str_lit __t1 $__str_243
+  _wrap_str_lit __t2 $__str_266
   _string_concat3 __t1 $__t1 $res $__t2
-  defstr __str_225 "\$(("
-  defstr __str_249 "/8%8))"
-  _wrap_str_lit __t2 $__str_225
-  _wrap_str_lit __t3 $__str_249
+  defstr __str_243 "\$(("
+  defstr __str_267 "/8%8))"
+  _wrap_str_lit __t2 $__str_243
+  _wrap_str_lit __t3 $__str_267
   _string_concat3 __t2 $__t2 $res $__t3
-  defstr __str_225 "\$(("
-  defstr __str_250 "%8))"
-  _wrap_str_lit __t3 $__str_225
-  _wrap_str_lit __t4 $__str_250
+  defstr __str_243 "\$(("
+  defstr __str_268 "%8))"
+  _wrap_str_lit __t3 $__str_243
+  _wrap_str_lit __t4 $__str_268
   _string_concat3 __t3 $__t3 $res $__t4
   _string_concat3 res $__t1 $__t2 $__t3
-  defstr __str_251 "printf %b \\\\\\\\0"
-  _wrap_str_lit __t1 $__str_251
+  defstr __str_269 "printf %b \\\\\\\\0"
+  _wrap_str_lit __t1 $__str_269
   _string_concat $1 $__t1 $res
   endlet $1 __t4 __t3 __t2 __t1 c ident res param
 }
@@ -6121,9 +8164,9 @@ _printf_call() { let format_str $2; let format_str_end $3; let params_text $4; l
   if [ $format_str = $format_str_end ] ; then
     : $(($1 = 0))
   else
-    defstr __str_252 "printf -- \""
-    defstr __str_246 "printf \""
-    _wrap_str_lit __t1 $(((_$format_str == __MINUS__) ? __str_252 : __str_246))
+    defstr __str_270 "printf -- \""
+    defstr __str_264 "printf \""
+    _wrap_str_lit __t1 $(((_$format_str == __MINUS__) ? __str_270 : __str_264))
     _wrap_str_imm __t2 $format_str $format_str_end
     _escape_text __t2 $__t2 $escape
     _concatenate_strings_with __t3 $((-__DQUOTE__)) $params_text $((-__SPACE__))
@@ -6159,13 +8202,13 @@ _handle_printf_call() { let format_str $2; let params $3
         mod=0
       elif [ $((_$format_str)) = $__SPACE__ ] || [ $((_$format_str)) = $__HASH__ ] || [ $((_$format_str)) = $__PLUS__ ] || [ $((_$format_str)) = $__MINUS__ ] || [ $((_$format_str)) = $__0__ ] ; then
         if [ $state != $_PRINTF_STATE_FLAGS ] ; then
-          defstr __str_253 "printf: flags must come before width and precision"
-          _fatal_error __ $__str_253
+          defstr __str_271 "printf: flags must come before width and precision"
+          _fatal_error __ $__str_271
         fi
       elif [ $__0__ -le $((_$format_str)) ] && [ $((_$format_str)) -le $__9__ ] ; then
         if [ $state != $_PRINTF_STATE_FLAGS ] && [ $state != $_PRINTF_STATE_PRECISION ] ; then
-          defstr __str_254 "printf: width or precision already specified"
-          _fatal_error __ $__str_254
+          defstr __str_272 "printf: width or precision already specified"
+          _fatal_error __ $__str_272
         fi
         while [ $__0__ -le $((_$format_str)) ] && [ $((_$format_str)) -le $__9__ ]; do
           : $((format_str += 1))
@@ -6176,14 +8219,14 @@ _handle_printf_call() { let format_str $2; let params $3
         : $((format_str -= 1))
       elif [ $((_$format_str)) = $__PERIOD__ ] ; then
         if [ $state -ge $_PRINTF_STATE_PRECISION ] ; then
-          defstr __str_255 "printf: precision already specified"
-          _fatal_error __ $__str_255
+          defstr __str_273 "printf: precision already specified"
+          _fatal_error __ $__str_273
         fi
         state=$_PRINTF_STATE_PRECISION
       elif [ $((_$format_str)) = $__STAR__ ] ; then
         if [ $param = 0 ] ; then
-          defstr __str_256 "printf: not enough parameters"
-          _fatal_error __ $__str_256
+          defstr __str_274 "printf: not enough parameters"
+          _fatal_error __ $__str_274
         fi
         if [ $state = $_PRINTF_STATE_FLAGS ] ; then
           _comp_rvalue width_text $param $_RVALUE_CTX_BASE
@@ -6192,8 +8235,8 @@ _handle_printf_call() { let format_str $2; let params $3
           _comp_rvalue precision_text $param $_RVALUE_CTX_BASE
           has_precision=1
         else
-          defstr __str_254 "printf: width or precision already specified"
-          _fatal_error __ $__str_254
+          defstr __str_272 "printf: width or precision already specified"
+          _fatal_error __ $__str_272
         fi
         param=0
       elif [ $((_$format_str)) = $__l__ ] || [ $((_$format_str)) = $__d__ ] || [ $((_$format_str)) = $__o__ ] || [ $((_$format_str)) = $__u__ ] || [ $((_$format_str)) = $__x__ ] || [ $((_$format_str)) = $__X__ ] || [ $((_$format_str)) = $__i__ ] ; then
@@ -6202,13 +8245,13 @@ _handle_printf_call() { let format_str $2; let params $3
             : $((format_str += 1))
           done
           if [ $((_$format_str)) != $__d__ ] && [ $((_$format_str)) != $__i__ ] && [ $((_$format_str)) != $__o__ ] && [ $((_$format_str)) != $__u__ ] && [ $((_$format_str)) != $__x__ ] && [ $((_$format_str)) != $__X__ ] ; then
-            defstr __str_257 "printf: unsupported format specifier"
-            _fatal_error __ $__str_257
+            defstr __str_275 "printf: unsupported format specifier"
+            _fatal_error __ $__str_275
           fi
         fi
         if [ $param = 0 ] ; then
-          defstr __str_256 "printf: not enough parameters"
-          _fatal_error __ $__str_256
+          defstr __str_274 "printf: not enough parameters"
+          _fatal_error __ $__str_274
         fi
         _concatenate_strings_with params_text $params_text $width_text $((-__SPACE__))
         _concatenate_strings_with params_text $params_text $precision_text $((-__SPACE__))
@@ -6218,12 +8261,12 @@ _handle_printf_call() { let format_str $2; let params $3
         mod=0
       elif [ $((_$format_str)) = $__c__ ] ; then
         if [ $param = 0 ] ; then
-          defstr __str_256 "printf: not enough parameters"
-          _fatal_error __ $__str_256
+          defstr __str_274 "printf: not enough parameters"
+          _fatal_error __ $__str_274
         fi
         if [ $has_width != 0 ] ; then
-          defstr __str_258 "printf: width not supported for %c"
-          _fatal_error __ $__str_258
+          defstr __str_276 "printf: width not supported for %c"
+          _fatal_error __ $__str_276
         fi
         _printf_call __t1 $format_start $specifier_start $params_text 0
         _append_glo_decl __ $__t1
@@ -6235,26 +8278,26 @@ _handle_printf_call() { let format_str $2; let params $3
         mod=0
       elif [ $((_$format_str)) = $__s__ ] ; then
         if [ $param = 0 ] ; then
-          defstr __str_256 "printf: not enough parameters"
-          _fatal_error __ $__str_256
+          defstr __str_274 "printf: not enough parameters"
+          _fatal_error __ $__str_274
         fi
         _runtime_use_put_pstr=1
         if [ $has_width != 0 ] || [ $has_precision != 0 ] ; then
           _concatenate_strings_with params_text $params_text $width_text $((-__SPACE__))
           _concatenate_strings_with params_text $params_text $precision_text $((-__SPACE__))
-          defstr __str_259 "\"\$(_put_pstr __ "
-          defstr __str_260 ")\""
-          _wrap_str_lit __t1 $__str_259
+          defstr __str_277 "\"\$(_put_pstr __ "
+          defstr __str_278 ")\""
+          _wrap_str_lit __t1 $__str_277
           _comp_rvalue __t2 $param $_RVALUE_CTX_BASE
-          _wrap_str_lit __t3 $__str_260
+          _wrap_str_lit __t3 $__str_278
           _string_concat3 __t1 $__t1 $__t2 $__t3
           _concatenate_strings_with params_text $params_text $__t1 $((-__SPACE__))
         else
           _printf_call __t1 $format_start $specifier_start $params_text 0
           _append_glo_decl __ $__t1
           format_start=$((format_str + 1))
-          defstr __str_261 "_put_pstr __ "
-          _wrap_str_lit __t1 $__str_261
+          defstr __str_279 "_put_pstr __ "
+          _wrap_str_lit __t1 $__str_279
           _comp_rvalue __t2 $param $_RVALUE_CTX_BASE
           _string_concat __t1 $__t1 $__t2
           _append_glo_decl __ $__t1
@@ -6262,8 +8305,8 @@ _handle_printf_call() { let format_str $2; let params $3
         param=0
         mod=0
       else
-        defstr __str_257 "printf: unsupported format specifier"
-        _fatal_error __ $__str_257
+        defstr __str_275 "printf: unsupported format specifier"
+        _fatal_error __ $__str_275
       fi
     elif [ $((_$format_str)) = $__PERCENT__ ] ; then
       mod=1
@@ -6306,8 +8349,8 @@ _comp_fun_call_code() { let node $2; let assign_to $3
       return
     elif [ $name_id = $_EXIT_ID ] && { _list_singleton param $params; [ $param != 0 ]; } ; then
       _comp_rvalue res $param $_RVALUE_CTX_BASE
-      defstr __str_262 "exit "
-      _wrap_str_lit __t1 $__str_262
+      defstr __str_280 "exit "
+      _wrap_str_lit __t1 $__str_280
       _string_concat $1 $__t1 $res
       endlet $1 __t2 __t1 res param name_id params name assign_to node
       return
@@ -6341,8 +8384,8 @@ _comp_fun_call_code() { let node $2; let assign_to $3
   if [ $assign_to != 0 ] ; then
     _comp_lvalue res $assign_to
   else
-    defstr __str_176 "__"
-    _wrap_str_lit res $__str_176
+    defstr __str_194 "__"
+    _wrap_str_lit res $__str_194
   fi
   _get_val __t1 $name
   _function_name __t1 $__t1
@@ -6376,21 +8419,21 @@ _comp_assignment() { let lhs $2; let rhs $3
         _string_concat3 __t1 $__t1 $((-__EQ__)) $__t2
         _append_glo_decl __ $__t1
       else
-        defstr __str_263 ": \$(("
-        defstr __str_204 " = "
-        defstr __str_226 "))"
-        _wrap_str_lit __t1 $__str_263
+        defstr __str_281 ": \$(("
+        defstr __str_222 " = "
+        defstr __str_244 "))"
+        _wrap_str_lit __t1 $__str_281
         _comp_lvalue __t2 $lhs
-        _wrap_str_lit __t3 $__str_204
+        _wrap_str_lit __t3 $__str_222
         _comp_rvalue __t4 $rhs $_RVALUE_CTX_ARITH_EXPANSION
-        _wrap_str_lit __t5 $__str_226
+        _wrap_str_lit __t5 $__str_244
         _string_concat5 __t1 $__t1 $__t2 $__t3 $__t4 $__t5
         _append_glo_decl __ $__t1
       fi
     fi
   else
-    defstr __str_264 "comp_assignment: unknown lhs"
-    _fatal_error __ $__str_264
+    defstr __str_282 "comp_assignment: unknown lhs"
+    _fatal_error __ $__str_282
   fi
   endlet $1 __t5 __t4 __t3 __t2 __t1 lhs_op rhs lhs
 }
@@ -6433,8 +8476,8 @@ _make_switch_pattern() { let statement $2
       _get_child statement $statement 1
     else
       if [ $str = 0 ] ; then
-        defstr __str_265 "Expected case in switch. Fallthrough is not supported."
-        _fatal_error __ $__str_265
+        defstr __str_283 "Expected case in switch. Fallthrough is not supported."
+        _fatal_error __ $__str_283
       fi
       _last_stmt=$statement
       _string_concat $1 $str $((-__RPAREN__))
@@ -6448,12 +8491,12 @@ _make_switch_pattern() { let statement $2
 _comp_switch() { let node $2
   let statement; let start_cgc_locals; let __t1; let __t2; let __t3
   start_cgc_locals=$_cgc_locals
-  defstr __str_266 "case "
-  defstr __str_267 " in"
-  _wrap_str_lit __t1 $__str_266
+  defstr __str_284 "case "
+  defstr __str_285 " in"
+  _wrap_str_lit __t1 $__str_284
   _get_child __t2 $node 0
   _comp_rvalue __t2 $__t2 $_RVALUE_CTX_BASE
-  _wrap_str_lit __t3 $__str_267
+  _wrap_str_lit __t3 $__str_285
   _string_concat3 __t1 $__t1 $__t2 $__t3
   _append_glo_decl __ $__t1
   _cgc_add_enclosing_switch __ $_in_tail_position
@@ -6463,8 +8506,8 @@ _comp_switch() { let node $2
     _new_ast2 node $__LBRACE__ $node 0
   fi
   if [ $node = 0 ] || { _get_op __t1 $node; [ $__t1 != $__LBRACE__ ]; } ; then
-    defstr __str_268 "comp_statement: switch without body"
-    _fatal_error __ $__str_268
+    defstr __str_286 "comp_statement: switch without body"
+    _fatal_error __ $__str_286
   fi
   while [ $node != 0 ] && { _get_op __t1 $node; [ $__t1 = $__LBRACE__ ]; }; do
     _get_child statement $node 0
@@ -6484,13 +8527,13 @@ _comp_switch() { let node $2
       done
     fi
     : $((_nest_level -= 1))
-    defstr __str_269 ";;"
-    _wrap_str_lit __t1 $__str_269
+    defstr __str_287 ";;"
+    _wrap_str_lit __t1 $__str_287
     _append_glo_decl __ $__t1
   done
   : $((_nest_level -= 1))
-  defstr __str_270 "esac"
-  _wrap_str_lit __t1 $__str_270
+  defstr __str_288 "esac"
+  _wrap_str_lit __t1 $__str_288
   _append_glo_decl __ $__t1
   _cgc_locals=$start_cgc_locals
   : $(($1 = 0))
@@ -6506,13 +8549,13 @@ _comp_if() { let node $2; let stmt_ctx $3
   _get_child else_node $node 2
   else_if=$((stmt_ctx & _STMT_CTX_ELSE_IF))
   stmt_ctx=$((stmt_ctx & ~ _STMT_CTX_ELSE_IF))
-  defstr __str_271 "elif "
-  defstr __str_272 "if "
-  defstr __str_273 " ; then"
-  _wrap_str_lit __t1 $((else_if ? __str_271 : __str_272))
+  defstr __str_289 "elif "
+  defstr __str_290 "if "
+  defstr __str_291 " ; then"
+  _wrap_str_lit __t1 $((else_if ? __str_289 : __str_290))
   _get_child __t2 $node 0
   _comp_rvalue __t2 $__t2 $((else_if ? _RVALUE_CTX_TEST_ELSEIF : _RVALUE_CTX_TEST))
-  _wrap_str_lit __t3 $__str_273
+  _wrap_str_lit __t3 $__str_291
   _string_concat3 __t1 $__t1 $__t2 $__t3
   _append_glo_decl __ $__t1
   : $((_nest_level += 1))
@@ -6527,8 +8570,8 @@ _comp_if() { let node $2; let stmt_ctx $3
     if _get_op __t1 $else_node; [ $__t1 = $_IF_KW ] ; then
       _comp_if termination_rhs $else_node $((stmt_ctx | _STMT_CTX_ELSE_IF))
     else
-      defstr __str_34 "else"
-      _wrap_str_lit __t1 $__str_34
+      defstr __str_35 "else"
+      _wrap_str_lit __t1 $__str_35
       _append_glo_decl __ $__t1
       : $((_nest_level += 1))
       start_glo_decl_idx=$_glo_decl_ix
@@ -6540,13 +8583,13 @@ _comp_if() { let node $2; let stmt_ctx $3
     fi
   fi
   if [ $((! else_if)) != 0 ] ; then
-    defstr __str_274 "fi"
-    _wrap_str_lit __t1 $__str_274
+    defstr __str_292 "fi"
+    _wrap_str_lit __t1 $__str_292
     _append_glo_decl __ $__t1
   fi
   if [ $((stmt_ctx & _STMT_CTX_SWITCH)) != 0 ] && [ $((termination_lhs ^ termination_rhs)) != 0 ] ; then
-    defstr __str_275 "Early break out of a switch case is unsupported"
-    _fatal_error __ $__str_275
+    defstr __str_293 "Early break out of a switch case is unsupported"
+    _fatal_error __ $__str_293
   fi
   _cgc_locals=$start_cgc_locals
   : $(($1 = termination_lhs && termination_rhs))
@@ -6566,10 +8609,10 @@ _comp_loop() { let cond $2; let body $3; let loop_end_stmt $4; let last_line $5;
     _undo_glo_decls __ $((_$((_heap + loop_binding + 2))))
     : $((_$((_heap + loop_binding + 3)) = _glo_decl_ix))
   fi
-  defstr __str_276 "while "
-  defstr __str_277 "; do"
-  _wrap_str_lit __t1 $__str_276
-  _wrap_str_lit __t2 $__str_277
+  defstr __str_294 "while "
+  defstr __str_295 "; do"
+  _wrap_str_lit __t1 $__str_294
+  _wrap_str_lit __t2 $__str_295
   _string_concat3 __t1 $__t1 $((cond ? cond : -__COLON__)) $__t2
   _append_glo_decl __ $__t1
   : $((_nest_level += 1))
@@ -6581,8 +8624,8 @@ _comp_loop() { let cond $2; let body $3; let loop_end_stmt $4; let last_line $5;
     _append_glo_decl __ $((-__COLON__))
   fi
   : $((_nest_level -= 1))
-  defstr __str_278 "done"
-  _wrap_str_lit __t1 $__str_278
+  defstr __str_296 "done"
+  _wrap_str_lit __t1 $__str_296
   _append_glo_decl __ $__t1
   _cgc_locals=$start_cgc_locals
   : $(($1 = (cond == -__COLON__) && always_returns))
@@ -6594,12 +8637,12 @@ _comp_break() {
   let binding; let __t1
   _cgc_lookup_enclosing_loop_or_switch binding $_cgc_locals
   if [ $binding = 0 ] ; then
-    defstr __str_279 "comp_statement: break not in loop or switch"
-    _fatal_error __ $__str_279
+    defstr __str_297 "comp_statement: break not in loop or switch"
+    _fatal_error __ $__str_297
   fi
   if [ $((_$((_heap + binding + 1)))) = $_BINDING_LOOP ] ; then
-    defstr __str_29 "break"
-    _wrap_str_lit __t1 $__str_29
+    defstr __str_30 "break"
+    _wrap_str_lit __t1 $__str_30
     _append_glo_decl __ $__t1
   fi
   : $(($1 = 1))
@@ -6611,12 +8654,12 @@ _comp_continue() {
   let binding; let __t1
   _cgc_lookup_enclosing_loop binding $_cgc_locals
   if [ $binding = 0 ] ; then
-    defstr __str_280 "comp_statement: continue not in loop"
-    _fatal_error __ $__str_280
+    defstr __str_298 "comp_statement: continue not in loop"
+    _fatal_error __ $__str_298
   fi
   _replay_glo_decls __ $((_$((_heap + binding + 2)))) $((_$((_heap + binding + 3))))
-  defstr __str_31 "continue"
-  _wrap_str_lit __t1 $__str_31
+  defstr __str_32 "continue"
+  _wrap_str_lit __t1 $__str_32
   _append_glo_decl __ $__t1
   : $(($1 = 0))
   endlet $1 __t1 binding
@@ -6632,11 +8675,11 @@ _comp_return() { let return_value $2
       _new_dollar_ident __t1 1
       _comp_fun_call __ $return_value $__t1
     else
-      defstr __str_281 ": \$((\$1 = "
-      defstr __str_226 "))"
-      _wrap_str_lit __t1 $__str_281
+      defstr __str_299 ": \$((\$1 = "
+      defstr __str_244 "))"
+      _wrap_str_lit __t1 $__str_299
       _comp_rvalue __t2 $return_value $_RVALUE_CTX_ARITH_EXPANSION
-      _wrap_str_lit __t3 $__str_226
+      _wrap_str_lit __t3 $__str_244
       _string_concat3 __t1 $__t1 $__t2 $__t3
       _append_glo_decl __ $__t1
     fi
@@ -6646,21 +8689,21 @@ _comp_return() { let return_value $2
   fi
   if [ $_in_tail_position != 0 ] && [ $binding != 0 ] ; then
     if [ $loop_depth -ge 2 ] ; then
-      defstr __str_282 "break "
-      _wrap_str_lit __t1 $__str_282
+      defstr __str_300 "break "
+      _wrap_str_lit __t1 $__str_300
       _wrap_int __t2 $loop_depth
       _string_concat __t1 $__t1 $__t2
       _append_glo_decl __ $__t1
     elif [ $loop_depth = 1 ] ; then
-      defstr __str_29 "break"
-      _wrap_str_lit __t1 $__str_29
+      defstr __str_30 "break"
+      _wrap_str_lit __t1 $__str_30
       _append_glo_decl __ $__t1
     fi
   elif [ $((! _in_tail_position)) != 0 ] ; then
     _append_glo_decl_fixup __t1
     _cons _rest_loc_var_fixups $__t1 $_rest_loc_var_fixups
-    defstr __str_37 "return"
-    _wrap_str_lit __t1 $__str_37
+    defstr __str_38 "return"
+    _wrap_str_lit __t1 $__str_38
     _append_glo_decl __ $__t1
   fi
   : $(($1 = 1))
@@ -6672,8 +8715,8 @@ _comp_var_decls() { let node $2
   let var_decl; let spec; let __t1; let __t2
   _get_child spec $node 1
   if [ $spec = $_EXTERN_KW ] || [ $spec = $_STATIC_KW ] ; then
-    defstr __str_283 "Extern and static storage class specifier not supported on local variables"
-    _fatal_error __ $__str_283
+    defstr __str_301 "Extern and static storage class specifier not supported on local variables"
+    _fatal_error __ $__str_301
   fi
   _get_child node $node 0
   while [ $node != 0 ]; do
@@ -6708,13 +8751,13 @@ _comp_statement() { let node $2; let stmt_ctx $3
     _get_child __t2 $node 1
     _comp_loop $1 $__t1 $__t2 0 0 $stmt_ctx
   elif [ $op = $_DO_KW ] ; then
-    defstr __str_284 ":"
-    _wrap_str_lit __t1 $__str_284
+    defstr __str_302 ":"
+    _wrap_str_lit __t1 $__str_302
     _get_child __t2 $node 0
-    defstr __str_285 " || break"
+    defstr __str_303 " || break"
     _get_child __t3 $node 1
     _comp_rvalue __t3 $__t3 $_RVALUE_CTX_TEST
-    _wrap_str_lit __t4 $__str_285
+    _wrap_str_lit __t4 $__str_303
     _string_concat __t3 $__t3 $__t4
     _comp_loop $1 $__t1 $__t2 0 $__t3 $stmt_ctx
   elif [ $op = $_FOR_KW ] ; then
@@ -6748,8 +8791,8 @@ _comp_statement() { let node $2; let stmt_ctx $3
     _comp_assignment __ $__t1 $__t2
     : $(($1 = 0))
   elif [ $op = $__COLON__ ] ; then
-    defstr __str_286 "#_ "
-    _wrap_str_lit __t1 $__str_286
+    defstr __str_304 "#_ "
+    _wrap_str_lit __t1 $__str_304
     _get_child __t2 $node 0
     _get_val __t2 $__t2
     _wrap_str_pool __t2 $__t2
@@ -6758,12 +8801,12 @@ _comp_statement() { let node $2; let stmt_ctx $3
     _get_child __t1 $node 1
     _comp_statement $1 $__t1 $stmt_ctx
   elif [ $op = $_GOTO_KW ] ; then
-    defstr __str_287 "goto statements not supported"
-    _fatal_error __ $__str_287
+    defstr __str_305 "goto statements not supported"
+    _fatal_error __ $__str_305
     : $(($1 = 0))
   elif { _get_op __t1 $node; [ $__t1 = $_CASE_KW ]; } || { _get_op __t1 $node; [ $__t1 = $_DEFAULT_KW ]; } ; then
-    defstr __str_288 "case/default must be at the beginning of a switch conditional block"
-    _fatal_error __ $__str_288
+    defstr __str_306 "case/default must be at the beginning of a switch conditional block"
+    _fatal_error __ $__str_306
     : $(($1 = 0))
   elif [ $op = $_DECLS ] ; then
     _comp_var_decls __ $node
@@ -6771,8 +8814,8 @@ _comp_statement() { let node $2; let stmt_ctx $3
   else
     _comp_rvalue str $node $_RVALUE_CTX_BASE
     if [ $_contains_side_effects != 0 ] ; then
-      defstr __str_289 ": "
-      _wrap_str_lit __t1 $__str_289
+      defstr __str_307 ": "
+      _wrap_str_lit __t1 $__str_307
       _string_concat __t1 $__t1 $str
       _append_glo_decl __ $__t1
     fi
@@ -6808,28 +8851,28 @@ _comp_glo_fun_decl() { let node $2
   while [ $params != 0 ]; do
     _car decl $params
     if _get_child __t1 $decl 1; _is_constant_type __t1 $__t1; [ $__t1 != 0 ] ; then
-      defstr __str_290 ": \$"
+      defstr __str_308 ": \$"
       _get_child __t1 $decl 0
       _get_val __t1 $__t1
       _wrap_str_pool __t1 $__t1
-      _wrap_str_lit __t2 $__str_290
+      _wrap_str_lit __t2 $__str_308
       _wrap_int __t3 $params_ix
       _string_concat3 __t1 $__t1 $__t2 $__t3
-      defstr __str_291 ", "
-      _wrap_str_lit __t2 $__str_291
+      defstr __str_309 ", "
+      _wrap_str_lit __t2 $__str_309
       _concatenate_strings_with function_comment $function_comment $__t1 $__t2
     fi
     _cdr params $params
     : $((params_ix += 1))
   done
   if [ $function_comment != 0 ] ; then
-    defstr __str_292 " # "
-    _wrap_str_lit __t1 $__str_292
+    defstr __str_310 " # "
+    _wrap_str_lit __t1 $__str_310
     _string_concat function_comment $__t1 $function_comment
   fi
-  defstr __str_293 "() {"
+  defstr __str_311 "() {"
   _function_name __t1 $name_symbol
-  _wrap_str_lit __t2 $__str_293
+  _wrap_str_lit __t2 $__str_311
   _string_concat4 __t1 $__t1 $__t2 $let_params_text $function_comment
   _append_glo_decl __ $__t1
   _in_tail_position=1
@@ -6852,8 +8895,8 @@ _comp_glo_fun_decl() { let node $2
     _append_glo_decl __ $((-__COLON__))
   fi
   : $((_nest_level -= 1))
-  defstr __str_294 "}\n"
-  _wrap_str_lit __t1 $__str_294
+  defstr __str_312 "}\n"
+  _wrap_str_lit __t1 $__str_312
   _append_glo_decl __ $__t1
   endlet $1 __t3 __t2 __t1 start_glo_decl_idx save_loc_vars_fixup decl params_ix function_comment let_params_text params fun_type name_symbol body fun_decl node
 }
@@ -6877,16 +8920,16 @@ _comp_glo_var_decl() { let node $2
       _symbol_len __t1 $__t1
       init_len=$((__t1 + 1))
       if [ $arr_len != 0 ] && [ $arr_len -lt $init_len ] ; then
-        defstr __str_295 "Array type is too small for initializer"
-        _fatal_error __ $__str_295
+        defstr __str_313 "Array type is too small for initializer"
+        _fatal_error __ $__str_313
       fi
       _get_val __t1 $init
       _comp_defstr __ $name $__t1 $(((arr_len != 0) ? arr_len : init_len))
     else
       if [ $init != 0 ] ; then
         if _get_op __t1 $init; [ $__t1 != $_INITIALIZER_LIST ] ; then
-          defstr __str_296 "Array declaration with invalid initializer"
-          _fatal_error __ $__str_296
+          defstr __str_314 "Array declaration with invalid initializer"
+          _fatal_error __ $__str_314
         fi
         _get_child init $init 0
         _runtime_use_initialize=1
@@ -6895,17 +8938,17 @@ _comp_glo_var_decl() { let node $2
         if [ $arr_len = 0 ] ; then
           arr_len=$init_len
         elif [ $arr_len -lt $init_len ] ; then
-          defstr __str_295 "Array type is too small for initializer"
-          _fatal_error __ $__str_295
+          defstr __str_313 "Array type is too small for initializer"
+          _fatal_error __ $__str_313
         fi
       fi
       if [ $arr_len = 0 ] ; then
-        defstr __str_297 "Array declaration without size or initializer list"
-        _fatal_error __ $__str_297
+        defstr __str_315 "Array declaration without size or initializer list"
+        _fatal_error __ $__str_315
       fi
       _runtime_defarr __
-      defstr __str_298 "defarr "
-      _wrap_str_lit __t1 $__str_298
+      defstr __str_316 "defarr "
+      _wrap_str_lit __t1 $__str_316
       _get_val __t2 $name
       _global_var __t2 $__t2
       _wrap_int __t3 $arr_len
@@ -6925,8 +8968,8 @@ _comp_glo_var_decl() { let node $2
 : $((__t2 = __t1 = rhs = constant_name = 0))
 _comp_assignment_constant() { let constant_name $2; let rhs $3
   let __t1; let __t2
-  defstr __str_299 "readonly "
-  _wrap_str_lit __t1 $__str_299
+  defstr __str_317 "readonly "
+  _wrap_str_lit __t1 $__str_317
   _comp_rvalue __t2 $rhs $_RVALUE_CTX_BASE
   _string_concat4 __t1 $__t1 $constant_name $((-__EQ__)) $__t2
   _append_glo_decl __ $__t1
@@ -6937,17 +8980,17 @@ _comp_assignment_constant() { let constant_name $2; let rhs $3
 _comp_enum_cases() { let ident $2; let cases $3
   let cas; let __t1; let __t2; let __t3
   if [ $ident != 0 ] ; then
-    defstr __str_286 "#_ "
-    defstr __str_300 " enum declaration"
-    _wrap_str_lit __t1 $__str_286
+    defstr __str_304 "#_ "
+    defstr __str_318 " enum declaration"
+    _wrap_str_lit __t1 $__str_304
     _get_val __t2 $ident
     _wrap_str_pool __t2 $__t2
-    _wrap_str_lit __t3 $__str_300
+    _wrap_str_lit __t3 $__str_318
     _string_concat3 __t1 $__t1 $__t2 $__t3
     _append_glo_decl __ $__t1
   else
-    defstr __str_301 "#_ Enum declaration"
-    _wrap_str_lit __t1 $__str_301
+    defstr __str_319 "#_ Enum declaration"
+    _wrap_str_lit __t1 $__str_319
     _append_glo_decl __ $__t1
   fi
   while [ $cases != 0 ]; do
@@ -6967,17 +9010,17 @@ _comp_struct() { let ident $2; let members $3
   let decl; let offset; let field_type; let __t1; let __t2; let __t3
   _new_ast0 offset $_INTEGER 0
   if [ $ident != 0 ] ; then
-    defstr __str_286 "#_ "
-    defstr __str_302 " struct member declarations"
-    _wrap_str_lit __t1 $__str_286
+    defstr __str_304 "#_ "
+    defstr __str_320 " struct member declarations"
+    _wrap_str_lit __t1 $__str_304
     _get_val __t2 $ident
     _wrap_str_pool __t2 $__t2
-    _wrap_str_lit __t3 $__str_302
+    _wrap_str_lit __t3 $__str_320
     _string_concat3 __t1 $__t1 $__t2 $__t3
     _append_glo_decl __ $__t1
   else
-    defstr __str_303 "#_ Struct member declarations"
-    _wrap_str_lit __t1 $__str_303
+    defstr __str_321 "#_ Struct member declarations"
+    _wrap_str_lit __t1 $__str_321
     _append_glo_decl __ $__t1
   fi
   while [ $members != 0 ]; do
@@ -6985,8 +9028,8 @@ _comp_struct() { let ident $2; let members $3
     _cdr members $members
     _get_child field_type $decl 1
     if { _get_op __t1 $field_type; [ $__t1 = $__LBRACK__ ]; } || { _get_op __t1 $field_type; [ $__t1 = $_STRUCT_KW ]; } ; then
-      defstr __str_304 "Nested structures not supported by shell backend. Use a reference type instead."
-      _fatal_error __ $__str_304
+      defstr __str_322 "Nested structures not supported by shell backend. Use a reference type instead."
+      _fatal_error __ $__str_322
     fi
     _get_child __t1 $decl 0
     _struct_member_var __t1 $__t1
@@ -7014,8 +9057,8 @@ _handle_enum_struct_union_type_decl() { let type $2
     _get_child __t2 $type 2
     _comp_struct __ $__t1 $__t2
   elif _get_op __t3 $type; [ $__t3 = $_UNION_KW ] ; then
-    defstr __str_305 "handle_enum_struct_union_type_decl: union not supported"
-    _fatal_error __ $__str_305
+    defstr __str_323 "handle_enum_struct_union_type_decl: union not supported"
+    _fatal_error __ $__str_323
   fi
   endlet $1 __t3 __t2 __t1 type
 }
@@ -7036,6 +9079,7 @@ _comp_glo_decl() { let node $2
   let declarations; let op; let __t1
   _get_op op $node
   _fun_gensym_ix=0
+  _fl_lower_glo_decl __ $node
   if [ $op = $_DECLS ] ; then
     if _get_child __t1 $node 1; [ $__t1 = $_EXTERN_KW ] ; then
       endlet $1 __t1 op declarations node
@@ -7054,8 +9098,8 @@ _comp_glo_decl() { let node $2
   elif [ $op = $_ENUM_KW ] || [ $op = $_STRUCT_KW ] || [ $op = $_UNION_KW ] ; then
     _handle_enum_struct_union_type_decl __ $node
   else
-    defstr __str_306 "comp_glo_decl: unexpected declaration"
-    _fatal_error __ $__str_306
+    defstr __str_324 "comp_glo_decl: unexpected declaration"
+    _fatal_error __ $__str_324
   fi
   endlet $1 __t1 op declarations node
 }
@@ -7102,8 +9146,8 @@ _initialize_function_variables() {
   while [ $counter -gt 0 ]; do
     _new_fresh_ident ident $counter
     _format_special_var __t1 $ident 0
-    defstr __str_204 " = "
-    _wrap_str_lit __t2 $__str_204
+    defstr __str_222 " = "
+    _wrap_str_lit __t2 $__str_222
     _concatenate_strings_with res $res $__t1 $__t2
     : $((counter -= 1))
   done
@@ -7111,17 +9155,17 @@ _initialize_function_variables() {
     ident=$((_$((_heap + env + 2))))
     if [ $((_$((_heap + env + 1)))) != $_BINDING_PARAM_LOCAL ] || { _is_constant_type __t1 $((_$((_heap + env + 4)))); [ $((!__t1)) != 0 ]; } ; then
       _local_var __t1 $ident
-      defstr __str_204 " = "
-      _wrap_str_lit __t2 $__str_204
+      defstr __str_222 " = "
+      _wrap_str_lit __t2 $__str_222
       _concatenate_strings_with res $res $__t1 $__t2
     fi
     env=$((_$((_heap + env))))
   done
   if [ $res != 0 ] ; then
-    defstr __str_263 ": \$(("
-    _wrap_str_lit __t1 $__str_263
-    defstr __str_307 " = 0))"
-    _wrap_str_lit __t2 $__str_307
+    defstr __str_281 ": \$(("
+    _wrap_str_lit __t1 $__str_281
+    defstr __str_325 " = 0))"
+    _wrap_str_lit __t2 $__str_325
     _string_concat3 res $__t1 $res $__t2
   fi
   : $(($1 = res))
@@ -7175,8 +9219,8 @@ _handle_macro_D() { let opt $2
         : $((opt += 1))
       done
       if [ $((_$opt)) = 0 ] ; then
-        defstr __str_308 "Unterminated string literal"
-        _fatal_error __ $__str_308
+        defstr __str_326 "Unterminated string literal"
+        _fatal_error __ $__str_326
       fi
       : $((_$opt = 0))
       _intern_str value_symbol $start
@@ -7190,15 +9234,15 @@ _handle_macro_D() { let opt $2
         : $((opt += 1))
       done
       if [ $((_$opt)) != 0 ] ; then
-        defstr __str_309 "Invalid macro definition value"
-        _fatal_error __ $__str_309
+        defstr __str_327 "Invalid macro definition value"
+        _fatal_error __ $__str_327
       fi
       _set_builtin_int_macro __ $macro_symbol $acc
     elif [ $((_$opt)) = $__NUL__ ] ; then
       _set_builtin_empty_macro __ $macro_symbol
     else
-      defstr __str_309 "Invalid macro definition value"
-      _fatal_error __ $__str_309
+      defstr __str_327 "Invalid macro definition value"
+      _fatal_error __ $__str_327
     fi
   else
     _set_builtin_int_macro __ $macro_symbol 1
@@ -7247,8 +9291,8 @@ _extract_c_code_from_annotated_file() { # filename: $2
   let c; let sh_fp
   _open sh_fp $2 0 0
   if [ $sh_fp -lt 0 ] ; then
-    defstr __str_310 "could not open .sh file for reading"
-    _fatal_error __ $__str_310
+    defstr __str_328 "could not open .sh file for reading"
+    _fatal_error __ $__str_328
     endlet $1 sh_fp c
     return
   fi
@@ -7261,8 +9305,8 @@ _extract_c_code_from_annotated_file() { # filename: $2
       if [ $c = $__SPACE__ ] ; then
         _output_rest_of_line __ $sh_fp 0
       elif [ $c = $__HASH__ ] ; then
-        defstr __str_311 "//"
-        _output_rest_of_line __ $sh_fp $__str_311
+        defstr __str_329 "//"
+        _output_rest_of_line __ $sh_fp $__str_329
         if [ $c = $__LF__ ] ; then
           printf "\n"
         fi
@@ -7298,8 +9342,8 @@ _main() { let argc $2; let argv_ $3
       elif [ $((_$((_$((argv_ + i)) + 1)))) = $__D__ ] ; then
         if [ $((_$((_$((argv_ + i)) + 2)))) = 0 ] ; then
           if [ $((_$((argv_ + i + 1)))) = 0 ] ; then
-            defstr __str_312 "missing macro name for -D option"
-            _fatal_error __ $__str_312
+            defstr __str_330 "missing macro name for -D option"
+            _fatal_error __ $__str_330
           fi
           : $((i += 1))
           _handle_macro_D __ $((_$((argv_ + i))))
@@ -7309,8 +9353,8 @@ _main() { let argc $2; let argv_ $3
       elif [ $((_$((_$((argv_ + i)) + 1)))) = $__U__ ] ; then
         if [ $((_$((_$((argv_ + i)) + 2)))) = 0 ] ; then
           if [ $((_$((argv_ + i + 1)))) = 0 ] ; then
-            defstr __str_313 "missing macro name for -U option"
-            _fatal_error __ $__str_313
+            defstr __str_331 "missing macro name for -U option"
+            _fatal_error __ $__str_331
           fi
           : $((i += 1))
           _handle_macro_U __ $((_$((argv_ + i))))
@@ -7319,13 +9363,13 @@ _main() { let argc $2; let argv_ $3
         fi
       elif [ $((_$((_$((argv_ + i)) + 1)))) = $__I__ ] ; then
         if [ $_include_search_path != 0 ] ; then
-          defstr __str_314 "only one include path allowed"
-          _fatal_error __ $__str_314
+          defstr __str_332 "only one include path allowed"
+          _fatal_error __ $__str_332
         fi
         if [ $((_$((_$((argv_ + i)) + 2)))) = 0 ] ; then
           if [ $((_$((argv_ + i + 1)))) = 0 ] ; then
-            defstr __str_315 "missing path for -I option"
-            _fatal_error __ $__str_315
+            defstr __str_333 "missing path for -I option"
+            _fatal_error __ $__str_333
           fi
           : $((i += 1))
           _include_search_path=$((_$((argv_ + i))))
@@ -7335,8 +9379,8 @@ _main() { let argc $2; let argv_ $3
       elif [ $((_$((_$((argv_ + i)) + 1)))) = $__C__ ] ; then
         if [ $((_$((_$((argv_ + i)) + 2)))) = 0 ] ; then
           if [ $((_$((argv_ + i + 1)))) = 0 ] ; then
-            defstr __str_316 "missing input file name for -C option"
-            _fatal_error __ $__str_316
+            defstr __str_334 "missing input file name for -C option"
+            _fatal_error __ $__str_334
           fi
           : $((i += 1))
           _extract_c_code_from_annotated_file __ $((_$((argv_ + i))))
@@ -7350,8 +9394,8 @@ _main() { let argc $2; let argv_ $3
         printf "Option "
         _putstr __ $((_$((argv_ + i))))
         printf "\n"
-        defstr __str_317 "unknown option"
-        _fatal_error __ $__str_317
+        defstr __str_335 "unknown option"
+        _fatal_error __ $__str_335
       fi
     else
       _include_file __ $((_$((argv_ + i)))) 0
@@ -7362,8 +9406,8 @@ _main() { let argc $2; let argv_ $3
     printf "Usage: "
     _putstr __ $((_$((argv_ + 0))))
     printf " <filename>\n"
-    defstr __str_318 "no input file"
-    _fatal_error __ $__str_318
+    defstr __str_336 "no input file"
+    _fatal_error __ $__str_336
   fi
   _ch=$__LF__
   _codegen_begin __
@@ -7414,7 +9458,11 @@ readonly __QUESTION__=63
 readonly __A__=65
 readonly __C__=67
 readonly __D__=68
+readonly __E__=69
+readonly __F__=70
+readonly __G__=71
 readonly __I__=73
+readonly __L__=76
 readonly __U__=85
 readonly __X__=88
 readonly __Z__=90
@@ -7428,8 +9476,12 @@ readonly __a__=97
 readonly __b__=98
 readonly __c__=99
 readonly __d__=100
+readonly __e__=101
 readonly __f__=102
+readonly __g__=103
+readonly __h__=104
 readonly __i__=105
+readonly __j__=106
 readonly __l__=108
 readonly __n__=110
 readonly __o__=111
@@ -7445,14 +9497,6 @@ readonly __BAR__=124
 readonly __RBRACE__=125
 readonly __TILDE__=126
 #_ Runtime library
-__ALLOC=1 # Starting heap at 1 because 0 is the null pointer.
-
-_malloc() { # $2 = object size
-  : $((_$__ALLOC = $2)) # Track object size
-  : $(($1 = $__ALLOC + 1))
-  : $((__ALLOC += $2 + 1))
-}
-
 __c2i_0=48
 __c2i_1=49
 __c2i_2=50
@@ -7753,6 +9797,7 @@ read_byte() { # $2: fd
   # The cursor is at the end of the buffer, we need to read the next line
   if [ $((_$((__buffer + __cursor)))) -eq 0 ]; then
     # Buffer has been read completely, read next line
+    if [ "${__ba_raw_fd--1}" = $__fd ]; then __ba_rawbyte $1 $__fd; return; fi
     refill_buffer $__fd
     __cursor=0 # Reset cursor and reload buffer
     : $((__buffer=__buffer_fd$__fd))
@@ -7844,6 +9889,7 @@ _read() { : $((__fd = $2)) $((__buf = $3)) $((__count = $4))
 
 _close() { # $2: fd
   __fd=$2
+  if [ -n "${__ba_net-}" ]; then __ba_net_close $__fd; __fd=$2; fi
   __buf=$((__buffer_fd$__fd))  # Get buffer
   _free __ $__buf              # Release buffer
   : $((__state_fd$__fd = -1))  # Mark the fd as closed

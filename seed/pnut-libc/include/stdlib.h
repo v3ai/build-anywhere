@@ -10,6 +10,8 @@ void *calloc(int n, int size);
 int atoi(char *s);
 long atol(char *s);
 long strtol(char *s, char **end, int base);
+double atof(char *s);
+double strtod(char *s, char **end);
 int abs(int v);
 long labs(long v);
 int rand(void);

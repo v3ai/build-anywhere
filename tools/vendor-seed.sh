@@ -10,7 +10,8 @@
 # awk and patch. Writes:
 #
 #   OUT_DIR/pnut-sh.sh   pnut's C-to-POSIX-shell compiler, as a shell script
-#   OUT_DIR/pnut/        pnut's C sources (pnut-sh.sh is generated from these)
+#   OUT_DIR/pnut/        pnut's C sources with tools/patches/pnut-shell-tier.patch
+#                        (pnut-sh.sh is generated from these)
 #   OUT_DIR/tcc/         TinyCC 0.9.27, trimmed to x86/x86_64 Linux, with the
 #                        pnut kit's patches and tools/patches/ applied
 #
@@ -41,18 +42,23 @@ simple_patch() { # FILE BEFORE AFTER
     mv "$1.new" "$1"
 }
 
-echo "pnut: generating pnut-sh.sh"
-$CC -std=c99 -O2 -w -Dtarget_sh -DNICE_UX "$PNUT/pnut.c" -o "$TMP/pnut-sh"
-"$TMP/pnut-sh" -Dtarget_sh -DNICE_UX "$PNUT/pnut.c" >"$OUT/pnut-sh.sh"
-chmod 755 "$OUT/pnut-sh.sh"
-
-echo "pnut: copying sources"
+echo "pnut: copying and patching sources"
+# The shell tier's floating point and terminal/socket hooks; pnut's x86
+# compiler is unchanged by it (the patch only touches the shell target).
+cp -R "$PNUT" "$TMP/pnut"
+(cd "$TMP/pnut" && patch -s -p1 <"$HERE/patches/pnut-shell-tier.patch")
 for f in pnut.c env.c exe.c x86.c elf.c arith64.c sh.c sh-runtime.c glo_decls.c \
-         text.c LICENSE README.md; do
-    cp "$PNUT/$f" "$OUT/pnut/$f"
+         text.c sh-float.c sh-float-lit.c LICENSE README.md; do
+    cp "$TMP/pnut/$f" "$OUT/pnut/$f"
 done
 cp -R "$PNUT/portable_libc" "$OUT/pnut/portable_libc"
 rm -f "$OUT/pnut/portable_libc/makefile" "$OUT/pnut/portable_libc/test-libc.c"
+
+echo "pnut: generating pnut-sh.sh"
+# (from the full checkout: pnut.c includes debug.c, which seed/ leaves out)
+$CC -std=c99 -O2 -w -Dtarget_sh -DNICE_UX "$TMP/pnut/pnut.c" -o "$TMP/pnut-sh"
+"$TMP/pnut-sh" -Dtarget_sh -DNICE_UX "$TMP/pnut/pnut.c" >"$OUT/pnut-sh.sh"
+chmod 755 "$OUT/pnut-sh.sh"
 
 echo "tcc: unpacking and patching 0.9.27"
 (cd "$TMP" && gzip -dc "$PNUT/kit/tcc-0.9.27.tar.gz" | tar -xf -)

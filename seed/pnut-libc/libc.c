@@ -5,8 +5,9 @@
  * fopen, fclose and fgetc; this adds <string.h>, <ctype.h> and the rest of
  * the commonly used <stdio.h> and <stdlib.h> functions.
  *
- * pnut-sh compiles a subset of C (no floating point, no unsigned types, no
- * local arrays), and this file stays inside it. Part of build-anywhere.
+ * pnut-sh compiles a subset of C (no unsigned types, no local arrays), and
+ * this file stays inside it. Floating point is in float.c, terminal control
+ * in term.c and sockets in net.c. Part of build-anywhere.
  */
 #include <stddef.h>
 #include <stdio.h>
