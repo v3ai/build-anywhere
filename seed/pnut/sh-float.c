@@ -44,7 +44,20 @@ ast fl_l_val[FL_LOCALS];
 int fl_nl = 0;
 
 void fl_init() {
+  int i = 0;
   fl_initialized = true;
+  // pnut-sh does not zero global arrays (bash and ksh reject unset elements)
+  while (i < FL_HASH) {
+    fl_g_key[i] = 0;
+    fl_g_val[i] = 0;
+    i += 1;
+  }
+  i = 0;
+  while (i < FL_LOCALS) {
+    fl_l_key[i] = 0;
+    fl_l_val[i] = 0;
+    i += 1;
+  }
   fl_t_int = new_ast0(INT_KW, 0);
   fl_t_double = new_ast0(DOUBLE_KW, 0);
   fl_t_charp = new_ast2('*', 0, new_ast0(CHAR_KW, 0));

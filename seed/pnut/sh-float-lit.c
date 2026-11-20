@@ -264,7 +264,33 @@ void fl_convert(char *digits, int nd, int exp10, int sticky, int neg) {
 
 // Lexer support: the digits of a literal are collected as it is read.
 
+int fl_lit_ready = 0;
+
+// pnut-sh does not zero global arrays, and bash and ksh reject reading an
+// element that was never set, so the arrays are cleared before first use.
+void fl_lit_init() {
+  int i = 0;
+  fl_lit_ready = 1;
+  while (i < FL_BN) {
+    fl_bn_n[i] = 0;
+    fl_bn_m[i] = 0;
+    fl_bn_q[i] = 0;
+    i += 1;
+  }
+  i = 0;
+  while (i < FL_MAX_DIGITS) {
+    fl_digits[i] = 0;
+    i += 1;
+  }
+  i = 0;
+  while (i < 4) {
+    fl_bits[i] = 0;
+    i += 1;
+  }
+}
+
 void fl_lex_begin() {
+  if (!fl_lit_ready) fl_lit_init();
   fl_nd = 0;
   fl_exp = 0;
   fl_sticky = 0;

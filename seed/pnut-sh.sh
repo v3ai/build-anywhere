@@ -1014,7 +1014,35 @@ _fl_convert() { let digits $2; let nd $3; let exp10 $4; let sticky $5; let neg $
   endlet $1 __t2 __t1 s bl k i qlen mlen nlen neg sticky exp10 nd digits
 }
 
+_fl_lit_ready=0
+: $((i = 0))
+_fl_lit_init() {
+  let i
+  i=0
+  _fl_lit_ready=1
+  while [ $i -lt 320 ]; do
+    : $((_$((_fl_bn_n + i)) = 0))
+    : $((_$((_fl_bn_m + i)) = 0))
+    : $((_$((_fl_bn_q + i)) = 0))
+    : $((i += 1))
+  done
+  i=0
+  while [ $i -lt 780 ]; do
+    : $((_$((_fl_digits + i)) = 0))
+    : $((i += 1))
+  done
+  i=0
+  while [ $i -lt 4 ]; do
+    : $((_$((_fl_bits + i)) = 0))
+    : $((i += 1))
+  done
+  endlet $1 i
+}
+
 _fl_lex_begin() {
+  if [ $((! _fl_lit_ready)) != 0 ] ; then
+    _fl_lit_init __
+  fi
   _fl_nd=0
   _fl_exp=0
   _fl_sticky=0
@@ -5202,10 +5230,22 @@ _fl_g_count=0
 defarr _fl_l_key 1000
 defarr _fl_l_val 1000
 _fl_nl=0
-: $((__t1 = 0))
+: $((__t1 = i = 0))
 _fl_init() {
-  let __t1
+  let i; let __t1
+  i=0
   _fl_initialized=1
+  while [ $i -lt 8192 ]; do
+    : $((_$((_fl_g_key + i)) = 0))
+    : $((_$((_fl_g_val + i)) = 0))
+    : $((i += 1))
+  done
+  i=0
+  while [ $i -lt 1000 ]; do
+    : $((_$((_fl_l_key + i)) = 0))
+    : $((_$((_fl_l_val + i)) = 0))
+    : $((i += 1))
+  done
   _new_ast0 _fl_t_int $_INT_KW 0
   _new_ast0 _fl_t_double $_DOUBLE_KW 0
   _new_ast0 __t1 $_CHAR_KW 0
@@ -5240,7 +5280,7 @@ _fl_init() {
   _init_ident _FL_BITS_ID $_IDENTIFIER $__str_183
   defstr __str_184 "ba_from_bits"
   _init_ident _FL_FROM_BITS_ID $_IDENTIFIER $__str_184
-  endlet $1 __t1
+  endlet $1 __t1 i
 }
 
 : $((h = key = 0))

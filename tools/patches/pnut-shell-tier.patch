@@ -220,7 +220,7 @@ diff -ruN a/sh.c b/sh.c
 diff -ruN a/sh-float.c b/sh-float.c
 --- a/sh-float.c
 +++ b/sh-float.c
-@@ -0,0 +1,982 @@
+@@ -0,0 +1,995 @@
 +// sh-float.c: floating point for the POSIX shell backend.
 +// Added by build-anywhere; BSD 2-Clause, like the rest of pnut.
 +//
@@ -267,7 +267,20 @@ diff -ruN a/sh-float.c b/sh-float.c
 +int fl_nl = 0;
 +
 +void fl_init() {
++  int i = 0;
 +  fl_initialized = true;
++  // pnut-sh does not zero global arrays (bash and ksh reject unset elements)
++  while (i < FL_HASH) {
++    fl_g_key[i] = 0;
++    fl_g_val[i] = 0;
++    i += 1;
++  }
++  i = 0;
++  while (i < FL_LOCALS) {
++    fl_l_key[i] = 0;
++    fl_l_val[i] = 0;
++    i += 1;
++  }
 +  fl_t_int = new_ast0(INT_KW, 0);
 +  fl_t_double = new_ast0(DOUBLE_KW, 0);
 +  fl_t_charp = new_ast2('*', 0, new_ast0(CHAR_KW, 0));
@@ -1206,7 +1219,7 @@ diff -ruN a/sh-float.c b/sh-float.c
 diff -ruN a/sh-float-lit.c b/sh-float-lit.c
 --- a/sh-float-lit.c
 +++ b/sh-float-lit.c
-@@ -0,0 +1,331 @@
+@@ -0,0 +1,357 @@
 +// sh-float-lit.c: floating-point literals for the POSIX shell backend.
 +// Added by build-anywhere; BSD 2-Clause, like the rest of pnut.
 +//
@@ -1473,7 +1486,33 @@ diff -ruN a/sh-float-lit.c b/sh-float-lit.c
 +
 +// Lexer support: the digits of a literal are collected as it is read.
 +
++int fl_lit_ready = 0;
++
++// pnut-sh does not zero global arrays, and bash and ksh reject reading an
++// element that was never set, so the arrays are cleared before first use.
++void fl_lit_init() {
++  int i = 0;
++  fl_lit_ready = 1;
++  while (i < FL_BN) {
++    fl_bn_n[i] = 0;
++    fl_bn_m[i] = 0;
++    fl_bn_q[i] = 0;
++    i += 1;
++  }
++  i = 0;
++  while (i < FL_MAX_DIGITS) {
++    fl_digits[i] = 0;
++    i += 1;
++  }
++  i = 0;
++  while (i < 4) {
++    fl_bits[i] = 0;
++    i += 1;
++  }
++}
++
 +void fl_lex_begin() {
++  if (!fl_lit_ready) fl_lit_init();
 +  fl_nd = 0;
 +  fl_exp = 0;
 +  fl_sticky = 0;
