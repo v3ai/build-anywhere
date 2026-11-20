@@ -746,6 +746,8 @@ pick_shell() {
     if [ -n "${BA_SHELL:-}" ]; then printf '%s\n' "$BA_SHELL"; return 0; fi
     for ps in dash ksh93 ksh mksh yash bash /bin/sh; do
         have "$ps" || continue
+        # Run as sh, it does not set KSH_VERSION: OpenBSD's sh is that ksh.
+        case $BA_OS:$ps in openbsd:/bin/sh|openbsd:ksh) continue ;; esac
         ps_v=$("$ps" -c 'echo "${KSH_VERSION:-}"' 2>/dev/null)
         case $ps_v in *"PD KSH"*) continue ;; esac
         command -v "$ps"
