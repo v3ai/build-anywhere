@@ -113,7 +113,7 @@ ba_os() {
     SunOS)     echo solaris ;;
     AIX)       echo aix ;;
     Haiku)     echo haiku ;;
-    *)         uname -s 2>/dev/null | tr 'A-Z' 'a-z' ;;
+    *)         uname -s 2>/dev/null | sed 'y/ABCDEFGHIJKLMNOPQRSTUVWXYZ/abcdefghijklmnopqrstuvwxyz/' ;;
     esac
 }
 
@@ -130,7 +130,9 @@ ba_arch() {
     if [ "$(uname -s 2>/dev/null)" = Linux ]; then
         case $ba_m in
         x86_64|aarch64)
-            if [ "$(od -An -tu1 -j4 -N1 /bin/sh 2>/dev/null | tr -d ' ')" = 1 ]; then
+            # shellcheck disable=SC2046
+            set -- $(od -An -tu1 -j4 -N1 /bin/sh 2>/dev/null) 0
+            if [ "$1" = 1 ]; then
                 case $ba_m in x86_64) ba_m=i686 ;; aarch64) ba_m=armv7l ;; esac
             fi ;;
         esac
@@ -318,7 +320,8 @@ pkg_privilege() {
 # "root" (pass it when pkg_privilege succeeded).
 pkg_managers() {
     if [ "${1:-}" = root ]; then
-        for pm in apt-get dnf yum microdnf tdnf zypper apk pacman xbps-install; do
+        # (On Photon OS, yum is a front end to tdnf.)
+        for pm in apt-get dnf tdnf yum microdnf zypper apk pacman xbps-install; do
             have "$pm" && echo "$pm"
         done
         [ "$BA_OS" = freebsd ] && have pkg && echo pkg
@@ -496,7 +499,7 @@ ba_hash() {
         bh_out=$(cksum -a "sha$bh_n" -q "$2" 2>/dev/null) ||
             bh_out=$(cksum -a "sha$bh_n" "$2" 2>/dev/null)
     fi
-    bh_out=$(printf '%s\n' "$bh_out" | tr 'A-F' 'a-f' |
+    bh_out=$(printf '%s\n' "$bh_out" | sed 'y/ABCDEF/abcdef/' |
              sed -n "s/.*\([0-9a-f]\{$bh_len\}\).*/\1/p" | sed -n 1p)
     [ -n "$bh_out" ] || return 1
     printf '%s\n' "$bh_out"
@@ -558,13 +561,17 @@ toolchain_keys() {
 toolchains() {
     [ "$BA_OS" = linux ] || return 0
     for tc_k in $(toolchain_keys); do
-        printf '%s\n' "$BA_TOOLCHAINS" | awk -v k="$tc_k" '$1 == k'
+        printf '%s\n' "$BA_TOOLCHAINS" | while read -r tc_1 tc_rest; do
+            [ "$tc_1" = "$tc_k" ] && printf '%s %s\n' "$tc_1" "$tc_rest"
+        done
     done
 }
 
 # Free space in kilobytes on the file system holding DIR.
 free_kb() {
-    df -Pk "$1" 2>/dev/null | awk 'NR == 2 { print $4 }'
+    # shellcheck disable=SC2046
+    set -- $(df -Pk "$1" 2>/dev/null | sed -n 2p)
+    [ $# -ge 4 ] && echo "$4"
 }
 
 # Write a cc wrapper for an unpacked toolchain: always link statically, as
@@ -846,9 +853,10 @@ doctor() {
     printf 'package:   '
     dr=
     pkg_privilege && dr=root
-    dpm=$(pkg_managers "$dr" | tr '\n' ' ')
+    # shellcheck disable=SC2046
+    dpm=$(echo $(pkg_managers "$dr"))
     if [ -n "$dpm" ]; then
-        printf 'possible (gcc or clang with %s' "${dpm% }"
+        printf 'possible (gcc or clang with %s' "$dpm"
         case $dpm in *brew*|*nix*) ;; *) printf ', %s' "$PKG_HOW" ;; esac
         printf ')\n'
     elif [ -n "$(pkg_managers root)" ]; then

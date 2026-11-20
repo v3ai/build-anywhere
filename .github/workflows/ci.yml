@@ -31,7 +31,7 @@ jobs:
         image:
           - debian:stable-slim                         # apt-get, no package lists yet
           - ubuntu:24.04                               # apt-get
-          - i386/debian:stable-slim                    # apt-get, 32-bit
+          - i386/debian:bookworm-slim                  # apt-get, 32-bit (trixie has no full i386)
           - fedora:latest                              # dnf
           - almalinux:9-minimal                        # microdnf
           - amazonlinux:2023                           # dnf

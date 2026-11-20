@@ -383,10 +383,14 @@ if [ "${BA_TEST_DOWNLOAD:-0}" = 1 ] && [ -n "$dl_files" ]; then
     urls=default
     have curl && urls="file://$T/mirror default"
     BA_TEST_URLS=$urls sh "$BA" --tiers=download --cache="$T/cache-dl" \
-        -o "$T/hello" "$hello" 2>"$T/stderr"
-    expect "download: hello" "hello, gcc" "$T/hello" gcc
-    if have curl && ! grep -q "checksum mismatch" "$T/stderr"; then
-        bad "download: the corrupted copy was not tried first"
+        -o "$T/hello" "$hello" 2>"$T/dl-err"
+    expect "download: hello" "hello, gcc" "$T/hello" gcc || sed 's/^/      /' "$T/dl-err"
+    if have curl; then
+        if grep -q "checksum mismatch" "$T/dl-err"; then
+            ok "download: the corrupted copy was tried first, then rejected"
+        else
+            bad "download: the corrupted copy was not tried first"; sed 's/^/      /' "$T/dl-err"
+        fi
     fi
     rm -f "$T/uni"
     # shellcheck disable=SC2086
