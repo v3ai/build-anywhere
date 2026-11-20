@@ -15,7 +15,9 @@ vendored sources under `seed/pnut/`, `seed/pnut-sh.sh` and `seed/tcc/`.
 - **download**: the downloaded gcc links programs statically with
   [musl](https://musl.libc.org) (MIT) and gcc's `libgcc` (GPL with the GCC
   runtime-library exception, which puts no conditions on your program).
-  The toolchains come from [musl.cc](https://musl.cc) and
+  The toolchains come from
+  [qbt-musl-cross-make](https://github.com/userdocs/qbt-musl-cross-make),
+  [musl.cc](https://musl.cc) and
   [cross-tools/musl-cross](https://github.com/cross-tools/musl-cross);
   they are downloaded, never stored in this repository.
 - **bootstrap**: the program is linked statically with

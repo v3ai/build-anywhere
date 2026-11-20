@@ -4,7 +4,7 @@
 #   tests/run.sh [SHELL...]
 #
 # Runs the driver under each SHELL given (default: every one of sh, dash,
-# bash, ksh, mksh, yash and busybox sh that is installed). The slow and
+# bash, ksh, mksh, yash, posh and busybox sh that is installed). The slow and
 # networked tests are opt-in:
 #
 #   BA_TEST_DOWNLOAD=1   download a prebuilt gcc for real (needs network, ~90 MB)
@@ -46,7 +46,7 @@ if [ $# -gt 0 ]; then
     shells="$*"
 else
     shells=
-    for s in sh dash bash ksh mksh yash; do
+    for s in sh dash bash ksh mksh yash posh; do
         have "$s" && shells="$shells $(command -v "$s")"
     done
     have busybox && shells="$shells busybox"
@@ -69,6 +69,10 @@ for f in build-anywhere seed/bootstrap-tcc.sh seed/cc-pnut.sh tools/vendor-seed.
 done
 
 # ---- system tier and the driver, under every shell -------------------------
+# Whether this machine has a compiler is decided once, with sh: under every
+# other shell, the system tier must then find it too.
+has_cc=0
+sh "$BA" --tiers=system --cache="$T/cache-sys" --cc >/dev/null 2>&1 && has_cc=1
 for s in $shells; do
     c=$T/cache-sys
     expect "[$s] --version" "build-anywhere $(sed -n 's/^BA_VERSION=//p' "$BA")" run_ba "$s" --version
@@ -77,7 +81,7 @@ for s in $shells; do
     else
         bad "[$s] --doctor"; sed 's/^/      /' "$T/doctor"
     fi
-    if run_ba "$s" --tiers=system --cache="$c" --cc >/dev/null 2>&1; then
+    if [ "$has_cc" = 1 ]; then
         rm -f "$T/hello"
         run_ba "$s" --tiers=system --cache="$c" -o "$T/hello" "$hello" 2>"$T/stderr"
         expect "[$s] system: hello" "hello, tiers" "$T/hello" tiers
@@ -89,7 +93,7 @@ for s in $shells; do
         skip "[$s] system: no compiler installed"
     fi
     # Arguments with spaces and quotes reach the compiler intact.
-    if run_ba "$s" --tiers=system --cache="$c" --cc >/dev/null 2>&1; then
+    if [ "$has_cc" = 1 ]; then
         mkdir -p "$T/dir with 'quotes'"
         cp "$hello" "$T/dir with 'quotes'/hello world.c"
         run_ba "$s" --tiers=system --cache="$c" -DGREETING='"x y"' \
@@ -170,7 +174,7 @@ pkg_setup() {
 [ "$1" = -n ] && shift
 echo "sudo $*" >>"$S/../pm.log"
 exec "$@"'
-    for pm in "$@"; do
+    for pm in ${1+"$@"}; do
         case $pm in
         brew) stub brew 'case $1 in
 --prefix) if [ $# -eq 1 ]; then echo "$S/../brew"; else echo "$S/../brew/opt/$2"; fi; exit 0 ;;
@@ -301,6 +305,17 @@ if [ -n "$realcc" ]; then
         bad "package: versioned compiler name"; sed 's/^/      /' "$T/err" | tail -n 10
     fi
 
+    # tdnf (Photon OS, Azure Linux) needs the C headers and binutils named.
+    pkg_setup tdnf
+    rm -f "$T/hello"
+    pkg_ba STUB_UID=0 sh "$BA" --tiers=package --cache="$pc" -o "$T/hello" "$hello" 2>"$T/err"
+    if [ "$("$T/hello" pkg 2>/dev/null)" = "hello, pkg" ] &&
+       grep -q "^tdnf install -y gcc glibc-devel binutils" "$T/pm.log"; then
+        ok "package: tdnf"
+    else
+        bad "package: tdnf"; sed 's/^/      /' "$T/err" "$T/pm.log" | tail -n 10
+    fi
+
     # No package manager at all: the tier fails quietly.
     pkg_setup
     if pkg_ba STUB_UID=0 sh "$BA" --tiers=package --cache="$pc" "$hello" >/dev/null 2>"$T/err"; then
@@ -335,6 +350,27 @@ else
     else
         bad "download: corrupted archive (unexpected output)"
         sed 's/^/      /' "$T/out"
+    fi
+fi
+
+# A toolchain already in the cache is used before anything is downloaded,
+# even if it is not the first choice. A fake one (the host compiler) is put
+# in the cache for the last toolchain listed for this machine.
+arch=$(sh "$BA" --doctor --cache="$T/c" 2>/dev/null | sed -n 's/^build-anywhere [^ ]* on \([^ ]*\) .*/\1/p')
+last=$(sed -n "/^BA_TOOLCHAINS='/,/^'/p" "$BA" | awk -v a="$arch" 'NF > 4 && ($1 == a || index($1, a "/") == 1) { l = $5 " " $6 } END { print l }')
+if [ -n "$dl_files" ] && [ -n "$last" ] && [ -n "$realcc" ]; then
+    set -- $last
+    mkdir -p "$T/cache-fake/toolchain-$1/${2%/*}"
+    printf '#!/bin/sh\nfor a; do shift; [ "$a" = -static ] || set -- "$@" "$a"; done\nexec %s "$@"\n' \
+        "$realcc" >"$T/cache-fake/toolchain-$1/$2"
+    chmod 755 "$T/cache-fake/toolchain-$1/$2"
+    rm -f "$T/hello"
+    BA_TEST_URLS="file://$T/nonexistent" sh "$BA" --tiers=download --cache="$T/cache-fake" \
+        -o "$T/hello" "$hello" 2>"$T/stderr"
+    if [ "$("$T/hello" c 2>/dev/null)" = "hello, c" ] && ! grep -q downloading "$T/stderr"; then
+        ok "download: a cached toolchain is used first"
+    else
+        bad "download: a cached toolchain is used first"; sed 's/^/      /' "$T/stderr"
     fi
 fi
 
@@ -396,7 +432,14 @@ else
 fi
 
 # ---- shell tier --------------------------------------------------------
-shell_tier() { # SHELL
+# pnut cannot run under posh or the public-domain ksh (see pick_shell in
+# build-anywhere).
+pnut_shell() { # SHELL
+    case $1 in *posh) return 1 ;; busybox) return 0 ;; esac
+    case $("$1" -c 'echo "${KSH_VERSION:-}"' 2>/dev/null) in *"PD KSH"*) return 1 ;; esac
+    return 0
+}
+shell_tier() { # SHELL ("" for the driver's choice)
     st_sh=$1
     if [ "$st_sh" = busybox ]; then   # BA_SHELL is one command: use a link named sh
         mkdir -p "$T/busybox"
@@ -405,12 +448,16 @@ shell_tier() { # SHELL
     fi
     rm -f "$T/hello.sh"
     BA_SHELL=$st_sh sh "$BA" --tiers=shell --cache="$T/cache-sh" -o "$T/hello.sh" "$hello" 2>"$T/stderr"
-    expect "[$1] shell: hello" "hello, pnut" "$st_sh" "$T/hello.sh" pnut
+    expect "[${1:-default}] shell: hello" "hello, pnut" "${st_sh:-sh}" "$T/hello.sh" pnut
 }
 if [ "${BA_TEST_SHELL_TIER:-0}" = 1 ]; then
-    for s in $shells; do shell_tier "$s"; done
+    for s in $shells; do
+        if pnut_shell "$s"; then shell_tier "$s"; else skip "[$s] shell: pnut does not run under it"; fi
+    done
+elif sh "$BA" --doctor --cache="$T/c" 2>/dev/null | grep -q '^shell: *possible'; then
+    shell_tier ""
 else
-    shell_tier sh
+    skip "shell: $(sh "$BA" --doctor --cache="$T/c" 2>/dev/null | sed -n 's/^shell: *//p')"
 fi
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"

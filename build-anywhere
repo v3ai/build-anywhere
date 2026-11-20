@@ -12,7 +12,7 @@
 #
 #   system     a compiler that is already installed (cc, c99, gcc, clang, tcc, ...)
 #   package    install gcc (or clang) with the system's package manager: apt-get,
-#              dnf, yum, zypper, apk, pacman, xbps-install, pkg, Homebrew or Nix
+#              dnf, yum, tdnf, zypper, apk, pacman, xbps-install, pkg, Homebrew, Nix
 #   download   download a prebuilt static gcc toolchain, checked against a
 #              pinned hash before it is run (Linux)
 #   bootstrap  TCC built from source starting from nothing but this shell, using
@@ -38,25 +38,35 @@
 
 BA_VERSION=0.1.0
 
-# Prebuilt toolchains for the download tier: gcc and musl, statically
-# linked, so they run on any Linux of their architecture. Each line is
+# Prebuilt toolchains for the download tier: gcc, binutils and musl,
+# statically linked, so they run on any Linux kernel of their architecture.
+# Each line is
 #   KEY ALGORITHM DIGEST FILE DIRECTORY GCC NEEDS URL...
-# KEY is the architecture, DIGEST the pinned hash of FILE (checked before
-# anything in it runs), DIRECTORY the top directory in FILE, GCC the
-# compiler in it, NEEDS a file that must exist for it to run ("-": none),
-# and each URL a directory to fetch FILE from, tried in order.
-# Hashes: https://musl.cc/SHA512SUMS and the .sha256 files of the
-# cross-tools/musl-cross 20261001 release. Each toolchain here was tested
-# (non-x86 ones under qemu-user). The riscv64 and s390x builds on musl.cc
-# are left out: their linker crashed in that test.
+# KEY says where the toolchain runs (see toolchain_keys), DIGEST is the
+# pinned hash of FILE (checked before anything in it runs), DIRECTORY the
+# top directory in FILE, GCC the compiler in it, NEEDS a file that must
+# exist for it to run ("-": none), and each URL a directory to fetch FILE
+# from, tried in order. For each machine the lines are tried in order.
+#
+# Sources: release 2647 of userdocs/qbt-musl-cross-make (gcc 16.2; hashes
+# computed when it was added), musl.cc (gcc 11.2; hashes from
+# https://musl.cc/SHA512SUMS; it does not answer some cloud networks), and
+# release 20261001 of cross-tools/musl-cross (gcc 16.2, needs glibc; hash
+# from its .sha256 file). Every toolchain here was tested, the non-x86 ones
+# under qemu-user. The riscv64 and s390x builds on musl.cc are left out:
+# their linker crashed in that test.
 BA_TOOLCHAINS='
-x86_64  sha512 44d441ad9aa11a06feddf3daa4c9f53ad7d9ca37af1f5a61379aca07793703d179410cea723c1b7fca94c4de19a321228bdb3656bc5cbdb5e3bea8e2d6dac6c7 x86_64-linux-musl-native.tgz x86_64-linux-musl-native bin/gcc - https://musl.cc https://more.musl.cc/11.2.1/x86_64-linux-musl
-x86     sha512 fa16e12bc665d3292586156847b8e957adb5e4b415bd94d6a7fb0e0d4991bdf0d770e24b35f12fee31100c21780748a1ac14a18f3c1390480d05df7fa790c7d4 i686-linux-musl-native.tgz i686-linux-musl-native bin/gcc - https://musl.cc https://more.musl.cc/11.2.1/x86_64-linux-musl
-aarch64 sha512 16d544e09845c9dbba50f29e0cb04dd661e17eb63c56acad6a67fd2a78aa7596b792477c7177d3cd56d408a27dc291a90507df882f2b099c0f25511ce08fd3b5 aarch64-linux-musl-native.tgz aarch64-linux-musl-native bin/gcc - https://musl.cc https://more.musl.cc/11.2.1/x86_64-linux-musl
-armv7   sha512 50b307c37e62a00d8d8a7c14e1f12c91ce11f16b25144b38fdec59e04de04bef8c5443b2922f20cccd36da0a0f5cfdd481b706ad21389bee2e7af4783c368f34 armv7l-linux-musleabihf-native.tgz armv7l-linux-musleabihf-native bin/gcc - https://musl.cc https://more.musl.cc/11.2.1/x86_64-linux-musl
-armv6   sha512 af05ac674f24e263edd13f13cffe077e7e02617eb1fb4314ae31bef6be2fe4c2f669c197bde5be9e5104f5c493bbf29497f4ba8f3300482807279935b162b7d8 armv6-linux-musleabihf-native.tgz armv6-linux-musleabihf-native bin/gcc - https://musl.cc https://more.musl.cc/11.2.1/x86_64-linux-musl
+x86_64      sha256 9c5afdabe4fe30c786afcfc71e84fc228a7f12660a9fa71ba1bba89ce2cd66da x86_64-x86_64-linux-musl.tar.xz x86_64-linux-musl bin/x86_64-linux-musl-gcc - https://github.com/userdocs/qbt-musl-cross-make/releases/download/2647
+x86_64      sha512 44d441ad9aa11a06feddf3daa4c9f53ad7d9ca37af1f5a61379aca07793703d179410cea723c1b7fca94c4de19a321228bdb3656bc5cbdb5e3bea8e2d6dac6c7 x86_64-linux-musl-native.tgz x86_64-linux-musl-native bin/gcc - https://musl.cc https://more.musl.cc/11.2.1/x86_64-linux-musl
+x86_64      sha256 faeaf3c7c377cb4351490988d9a1c8fed7d403a5b8066e5103af5d4dd96450fe x86_64-unknown-linux-musl.tar.xz x86_64-unknown-linux-musl bin/x86_64-unknown-linux-musl-gcc /lib64/ld-linux-x86-64.so.2 https://github.com/cross-tools/musl-cross/releases/download/20261001
+x86/x86_64  sha256 9760f2710b622dd44c3e8e121a147b79ff45ac1c5c85cd34fd7916ef4f60d5b3 x86_64-i686-linux-musl.tar.xz i686-linux-musl bin/i686-linux-musl-gcc - https://github.com/userdocs/qbt-musl-cross-make/releases/download/2647
+x86         sha512 fa16e12bc665d3292586156847b8e957adb5e4b415bd94d6a7fb0e0d4991bdf0d770e24b35f12fee31100c21780748a1ac14a18f3c1390480d05df7fa790c7d4 i686-linux-musl-native.tgz i686-linux-musl-native bin/gcc - https://musl.cc https://more.musl.cc/11.2.1/x86_64-linux-musl
+aarch64     sha256 a6094422f286adb8357772bea22783adefafecf2ac8d39e49c760348f93b85d0 aarch64-aarch64-linux-musl.tar.xz aarch64-linux-musl bin/aarch64-linux-musl-gcc - https://github.com/userdocs/qbt-musl-cross-make/releases/download/2647
+aarch64     sha512 16d544e09845c9dbba50f29e0cb04dd661e17eb63c56acad6a67fd2a78aa7596b792477c7177d3cd56d408a27dc291a90507df882f2b099c0f25511ce08fd3b5 aarch64-linux-musl-native.tgz aarch64-linux-musl-native bin/gcc - https://musl.cc https://more.musl.cc/11.2.1/x86_64-linux-musl
+armv7/aarch64 sha256 0401701aabbeeb8dc6918b8cf3a64b6c14e4c694abb18d6719f3c74dcf25c78d aarch64-armv7l-linux-musleabihf.tar.xz armv7l-linux-musleabihf bin/armv7l-linux-musleabihf-gcc - https://github.com/userdocs/qbt-musl-cross-make/releases/download/2647
+armv7       sha512 50b307c37e62a00d8d8a7c14e1f12c91ce11f16b25144b38fdec59e04de04bef8c5443b2922f20cccd36da0a0f5cfdd481b706ad21389bee2e7af4783c368f34 armv7l-linux-musleabihf-native.tgz armv7l-linux-musleabihf-native bin/gcc - https://musl.cc https://more.musl.cc/11.2.1/x86_64-linux-musl
+armv6       sha512 af05ac674f24e263edd13f13cffe077e7e02617eb1fb4314ae31bef6be2fe4c2f669c197bde5be9e5104f5c493bbf29497f4ba8f3300482807279935b162b7d8 armv6-linux-musleabihf-native.tgz armv6-linux-musleabihf-native bin/gcc - https://musl.cc https://more.musl.cc/11.2.1/x86_64-linux-musl
 powerpc64le sha512 d416546a4222be2d063ac99cfadead181d08199791e6367752a7e3421b9c20a3b6aade928205efbfd96c2dfb94b88401c992f79ab3a2fa1507e007be0a348a5c powerpc64le-linux-musl-native.tgz powerpc64le-linux-musl-native bin/gcc - https://musl.cc https://more.musl.cc/11.2.1/x86_64-linux-musl
-x86_64  sha256 faeaf3c7c377cb4351490988d9a1c8fed7d403a5b8066e5103af5d4dd96450fe x86_64-unknown-linux-musl.tar.xz x86_64-unknown-linux-musl bin/x86_64-unknown-linux-musl-gcc /lib64/ld-linux-x86-64.so.2 https://github.com/cross-tools/musl-cross/releases/download/20261001
 '
 
 # ---------------------------------------------------------------------------
@@ -215,7 +225,7 @@ search_cc() {
     [ -n "${CC:-}" ] && ts_cands=$CC
     ts_names="cc gcc clang"
     [ -n "$ts_prefer" ] && ts_names="$ts_prefer $ts_names"
-    for ts_dir in "$@"; do
+    for ts_dir in ${1+"$@"}; do   # (old ksh: "$@" with no arguments is an error under set -u)
         for ts_n in $ts_names; do
             [ -x "$ts_dir/$ts_n" ] && ts_cands="$ts_cands
 $(q "$ts_dir/$ts_n")"
@@ -308,7 +318,7 @@ pkg_privilege() {
 # "root" (pass it when pkg_privilege succeeded).
 pkg_managers() {
     if [ "${1:-}" = root ]; then
-        for pm in apt-get dnf yum microdnf zypper apk pacman xbps-install; do
+        for pm in apt-get dnf yum microdnf tdnf zypper apk pacman xbps-install; do
             have "$pm" && echo "$pm"
         done
         [ "$BA_OS" = freebsd ] && have pkg && echo pkg
@@ -369,6 +379,8 @@ pkg_install() {
               pkg_run env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends "$@"; } ;;
     dnf|yum|microdnf)
         pkg_run "$1" install -y "$2" ;;
+    tdnf)   # Photon OS, Azure Linux: gcc does not pull in these
+        pkg_run tdnf install -y "$2" glibc-devel binutils ;;
     zypper)
         pkg_run zypper --non-interactive install --no-recommends "$2" glibc-devel ;;
     apk)
@@ -445,7 +457,8 @@ tier_package() {
 ba_fetch() {
     rm -f "$2"
     if have curl; then
-        curl -fsSL --retry 2 --connect-timeout 20 -o "$2" "$1" 2>>"$BA_TMP/log" && return 0
+        # Give up on a stalled source (under 1 KB/s for a minute): the next is tried.
+        curl -fsSL --retry 2 --connect-timeout 20 -Y 1024 -y 60 -o "$2" "$1" 2>>"$BA_TMP/log" && return 0
     fi
     if have wget; then
         wget -q -T 20 -O "$2" "$1" 2>>"$BA_TMP/log" && return 0
@@ -521,23 +534,32 @@ have_unpacker() { # FILE
     esac
 }
 
-# The key of BA_TOOLCHAINS for this machine.
-toolchain_key() {
+# The keys of BA_TOOLCHAINS that fit this machine, best first. A 32-bit
+# user space on a 64-bit kernel (a container, for example) can also use a
+# 64-bit toolchain that builds 32-bit programs: key "x86/x86_64" or
+# "armv7/aarch64".
+toolchain_keys() {
+    tk_m=$(uname -m 2>/dev/null)
     case $BA_ARCH in
+    x86)
+        case $tk_m in x86_64|amd64) echo x86/x86_64 ;; esac
+        echo x86 ;;
     arm)
-        case $(uname -m 2>/dev/null) in
+        case $tk_m in
+        aarch64|arm64|armv8l) echo armv7/aarch64; echo armv7 ;;  # (32-bit user space on arm64)
+        armv7*|armv8*) echo armv7 ;;
         armv6*) echo armv6 ;;
-        armv7*|armv8*|aarch64|arm64) echo armv7 ;;   # (32-bit user space on arm64)
-        *) echo arm-other ;;
         esac ;;
     *) echo "$BA_ARCH" ;;
     esac
 }
 
-# Print the BA_TOOLCHAINS lines that fit this machine.
+# Print the BA_TOOLCHAINS lines that fit this machine, best first.
 toolchains() {
     [ "$BA_OS" = linux ] || return 0
-    printf '%s\n' "$BA_TOOLCHAINS" | awk -v k="$(toolchain_key)" '$1 == k'
+    for tc_k in $(toolchain_keys); do
+        printf '%s\n' "$BA_TOOLCHAINS" | awk -v k="$tc_k" '$1 == k'
+    done
 }
 
 # Free space in kilobytes on the file system holding DIR.
@@ -594,7 +616,7 @@ toolchain_get() {
     tg_arch=$BA_TMP/$tg_file
     tg_ok=0
     for tg_base in "$@"; do
-        say "downloading gcc ($tg_file, about 90 MB) from $tg_base..."
+        say "downloading gcc ($tg_file) from $tg_base..."
         if ! ba_fetch "$tg_base/$tg_file" "$tg_arch"; then
             say "download: could not fetch $tg_base/$tg_file"
             continue
@@ -629,6 +651,18 @@ toolchain_get() {
     return 1
 }
 
+# toolchain_use DIRECTORY GCC: use an unpacked toolchain if it works here.
+toolchain_use() {
+    tu_w=$(toolchain_wrapper "$BA_CACHE/toolchain-$1" "$2") || return 1
+    if probe_cc "$(q "$tu_w")"; then
+        BA_CC=$(q "$tu_w")
+        BA_CC_DESC="downloaded gcc ($1)"
+        return 0
+    fi
+    vsay "download: $1 does not work on this system"
+    return 1
+}
+
 tier_download() {
     td_list=$(toolchains)
     if [ -z "$td_list" ]; then
@@ -638,48 +672,52 @@ tier_download() {
     td_nl='
 '
     td_ifs=$IFS
-    IFS=$td_nl
-    for td_line in $td_list; do
-        IFS=$td_ifs
-        # shellcheck disable=SC2086
-        set -- $td_line
-        td_top=$5 td_gcc=$6 td_needs=$7
-        td_dir=$BA_CACHE/toolchain-$td_top
-        if [ "$td_needs" != - ] && [ ! -e "$td_needs" ]; then
-            vsay "download: $4 needs $td_needs, which this system lacks"
-            continue
-        fi
-        if [ ! -x "$td_dir/$td_gcc" ]; then
+    # A toolchain that is already in the cache, then each one in turn.
+    for td_pass in cached download; do
+        IFS=$td_nl
+        for td_line in $td_list; do
+            IFS=$td_ifs
+            # shellcheck disable=SC2086
+            set -- $td_line
+            td_top=$5 td_gcc=$6 td_needs=$7
+            if [ -x "$BA_CACHE/toolchain-$td_top/$td_gcc" ]; then
+                [ "$td_pass" = cached ] && toolchain_use "$td_top" "$td_gcc" && return 0
+                continue
+            fi
+            [ "$td_pass" = download ] || continue
+            if [ "$td_needs" != - ] && [ ! -e "$td_needs" ]; then
+                vsay "download: $4 needs $td_needs, which this system lacks"
+                continue
+            fi
             ba_lock download downloading || return 1
             td_algo=$2 td_sum=$3 td_file=$4
             shift 7
             toolchain_get "$td_algo" "$td_sum" "$td_file" "$td_top" "$td_gcc" "$@"
             td_st=$?
             ba_unlock
-            [ "$td_st" = 0 ] || continue
-        fi
-        td_w=$(toolchain_wrapper "$td_dir" "$td_gcc") || return 1
-        if probe_cc "$(q "$td_w")"; then
-            BA_CC=$(q "$td_w")
-            BA_CC_DESC="downloaded gcc ($td_top)"
-            return 0
-        fi
-        vsay "download: $td_top does not work on this system"
+            [ "$td_st" = 0 ] && toolchain_use "$td_top" "$td_gcc" && return 0
+        done
+        IFS=$td_ifs
     done
-    IFS=$td_ifs
     return 1
 }
 
 # ---------------------------------------------------------------------------
 # Shells for running pnut: pick the fastest POSIX shell that is installed.
-
+# The public-domain ksh (/bin/ksh on NetBSD; ksh and sh on OpenBSD) cannot
+# run pnut: it crashes or hangs. Fails when there is no other shell.
 pick_shell() {
-    if [ -n "${BA_SHELL:-}" ]; then printf '%s\n' "$BA_SHELL"; return; fi
-    for ps in dash ksh93 ksh mksh yash bash; do
-        if have "$ps"; then command -v "$ps"; return; fi
+    if [ -n "${BA_SHELL:-}" ]; then printf '%s\n' "$BA_SHELL"; return 0; fi
+    for ps in dash ksh93 ksh mksh yash bash /bin/sh; do
+        have "$ps" || continue
+        ps_v=$("$ps" -c 'echo "${KSH_VERSION:-}"' 2>/dev/null)
+        case $ps_v in *"PD KSH"*) continue ;; esac
+        command -v "$ps"
+        return 0
     done
-    echo /bin/sh
+    return 1
 }
+NO_SHELL="the only shell is pdksh, which cannot run pnut (install dash or bash, or set BA_SHELL)"
 
 # ---------------------------------------------------------------------------
 # Tier 4: bootstrap TCC from the shell.
@@ -726,7 +764,7 @@ tier_bootstrap() {
         mkdir -p "$BA_CACHE" || return 1
         ba_lock bootstrap bootstrapping || return 1
         if [ ! -x "$tb_dir/bin/cc" ]; then
-            tb_sh=$(pick_shell)
+            tb_sh=$(pick_shell) || { ba_unlock; say "bootstrap: $NO_SHELL"; return 1; }
             if [ -d "$BA_CACHE/work-tcc-$BA_ARCH" ]; then
                 say "resuming an interrupted bootstrap of a C compiler from the shell ($tb_sh)"
             else
@@ -758,12 +796,13 @@ tier_bootstrap() {
 
 tier_shell() {
     [ -f "$BA_SEED/pnut-sh.sh" ] || { vsay "shell: seed/ is missing"; return 1; }
+    tsh_sh=$(pick_shell) || { say "shell: $NO_SHELL"; return 1; }
     mkdir -p "$BA_CACHE/bin" || return 1
     tsh_w=$BA_CACHE/bin/cc-pnut
     {
         echo '#!/bin/sh'
         echo '# Generated by build-anywhere: a cc-like front end for pnut-sh.sh.'
-        echo "BA_SHELL=\${BA_SHELL:-$(q "$(pick_shell)")}"
+        echo "BA_SHELL=\${BA_SHELL:-$(q "$tsh_sh")}"
         echo 'export BA_SHELL'
         echo "exec \"\$BA_SHELL\" $(q "$BA_SEED/cc-pnut.sh") \"\$@\""
     } >"$tsh_w.tmp" && chmod 755 "$tsh_w.tmp" && mv -f "$tsh_w.tmp" "$tsh_w" || return 1
@@ -820,29 +859,33 @@ doctor() {
 
     printf 'download:  '
     dl=$(toolchains)
+    dc=$(printf '%s\n' "$dl" | while read -r d1 d2 d3 d4 d5 d6 drest; do
+             [ -n "$d5" ] && [ -x "$BA_CACHE/toolchain-$d5/$d6" ] && { echo "$d5"; break; }
+         done)
     if [ -z "$dl" ]; then printf 'unavailable (no prebuilt toolchain for %s %s)\n' "$BA_ARCH" "$BA_OS"
+    elif [ -n "$dc" ]; then printf 'ok (%s already downloaded)\n' "$dc"
     else
+        # shellcheck disable=SC2086
         set -- $dl
-        if [ -x "$BA_CACHE/toolchain-$5/$6" ]; then printf 'ok (%s already downloaded)\n' "$5"
-        else
-            dm=
-            have_fetcher || dm="$dm no downloader (curl/wget/fetch/ftp);"
-            have_hash "$2" || dm="$dm no $2 tool;"
-            have_unpacker "$4" || dm="$dm cannot unpack $4;"
-            if [ -z "$dm" ]; then printf 'possible (gcc %s, about 90 MB, needs network)\n' "$5"
-            else printf 'unavailable:%s\n' "${dm%;}"; fi
-        fi
+        dm=
+        have_fetcher || dm="$dm no downloader (curl/wget/fetch/ftp);"
+        have_hash "$2" || dm="$dm no $2 tool;"
+        have_unpacker "$4" || dm="$dm cannot unpack $4;"
+        if [ -z "$dm" ]; then printf 'possible (gcc %s, 40-90 MB, needs network)\n' "$5"
+        else printf 'unavailable:%s\n' "${dm%;}"; fi
     fi
 
     printf 'bootstrap: '
     if [ ! -f "$BA_SEED/bootstrap-tcc.sh" ]; then printf 'unavailable (seed/ is missing)\n'
     elif ! bootstrap_supported; then printf 'unavailable (needs x86 or x86_64 Linux)\n'
     elif [ -x "$BA_CACHE/tcc-$BA_ARCH-linux-$BA_VERSION/bin/cc" ]; then printf 'ok (already bootstrapped)\n'
-    else printf 'possible (one-time build, several minutes, using %s)\n' "$(pick_shell)"; fi
+    elif ! ds=$(pick_shell); then printf 'unavailable (%s)\n' "$NO_SHELL"
+    else printf 'possible (one-time build, several minutes, using %s)\n' "$ds"; fi
 
     printf 'shell:     '
-    if [ -f "$BA_SEED/pnut-sh.sh" ]; then printf 'possible (C subset only, using %s)\n' "$(pick_shell)"
-    else printf 'unavailable (seed/ is missing)\n'; fi
+    if [ ! -f "$BA_SEED/pnut-sh.sh" ]; then printf 'unavailable (seed/ is missing)\n'
+    elif ! ds=$(pick_shell); then printf 'unavailable (%s)\n' "$NO_SHELL"
+    else printf 'possible (C subset only, using %s)\n' "$ds"; fi
 }
 
 usage() {

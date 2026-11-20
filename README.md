@@ -23,8 +23,8 @@ test program:
 | Tier | What it does | Needs | First use | Output |
 |---|---|---|---|---|
 | **system** | Uses an installed compiler: `$CC`, `cc`, `c99`, `gcc`, `clang`, `tcc`, `pcc`, `cproc`, ... | a compiler | instant | native program |
-| **package** | Installs gcc (or clang, if gcc can't be installed) with the system's package manager: `apt-get`, `dnf`, `yum`, `zypper`, `apk`, `pacman`, `xbps-install`, FreeBSD `pkg`, Homebrew, Nix or Termux, or the Command Line Tools on macOS. | network, and root, passwordless `sudo`/`doas`, or a terminal to type a password in (Homebrew, Nix and Termux need none) | ~10-60 s | native program |
-| **download** | Downloads a prebuilt gcc for Linux (static, with musl) from [musl.cc](https://musl.cc), its mirror, or [cross-tools](https://github.com/cross-tools/musl-cross), and keeps it in the cache. The archive is checked against a SHA-512 or SHA-256 pinned in the script before anything in it runs. | Linux on x86_64, x86, arm64, armv6/armv7 or ppc64le; network; `curl`, `wget` or BusyBox; a hash tool; about 1 GB of disk | ~30 s | native static program |
+| **package** | Installs gcc (or clang, if gcc can't be installed) with the system's package manager: `apt-get`, `dnf`, `yum`, `tdnf`, `zypper`, `apk`, `pacman`, `xbps-install`, FreeBSD `pkg`, Homebrew, Nix or Termux, or the Command Line Tools on macOS. | network, and root, passwordless `sudo`/`doas`, or a terminal to type a password in (Homebrew, Nix and Termux need none) | ~10-60 s | native program |
+| **download** | Downloads a prebuilt gcc for Linux (static, with musl) and keeps it in the cache. The archive is checked against a SHA-256 or SHA-512 pinned in the script before anything in it runs. | Linux on x86_64, x86, arm64, armv6/armv7 or ppc64le; network; `curl`, `wget` or BusyBox; a hash tool; about 1 GB of disk | ~30 s | native static program |
 | **bootstrap** | Builds TinyCC from source, starting from a C compiler written in shell. | x86 or x86_64 Linux, any POSIX shell | ~4-5 min, once | native static program |
 | **shell** | Compiles your program *into a shell script* with [pnut](https://github.com/udem-dlteam/pnut). | any POSIX shell | seconds | shell script (subset of C) |
 
@@ -64,7 +64,7 @@ cache: /home/me/.cache/build-anywhere
 
 system:    ok (cc)
 package:   possible (gcc or clang with apt-get, with sudo)
-download:  possible (gcc x86_64-linux-musl-native, about 90 MB, needs network)
+download:  possible (gcc x86_64-linux-musl, 40-90 MB, needs network)
 bootstrap: possible (one-time build, several minutes, using /usr/bin/dash)
 shell:     possible (C subset only, using /usr/bin/dash)
 ```
@@ -97,13 +97,24 @@ from the system: gcc, binutils and musl, all statically linked. It is
 unpacked to the cache, and a wrapper there runs it with `-static`, so the
 programs it builds are static too and run on any Linux of the same
 architecture. The archive's hash is pinned in the script, and an archive
-that doesn't match is deleted without being unpacked. If a source is down
-or serves a bad file, the next one is tried: musl.cc, then its mirror
-more.musl.cc, then (on x86_64) a newer gcc from cross-tools.
+that doesn't match is deleted without being unpacked. A toolchain that is
+already in the cache is used before anything is downloaded, and if a
+source is down or serves a bad file, the next one is tried:
 
-Each toolchain listed was tested: on x86_64 and x86 natively, and on arm64,
-armv7, armv6 and ppc64le under qemu-user. The riscv64 and s390x toolchains
-on musl.cc are left out because their linker crashed in that test.
+| Machine | First choice | Then |
+|---|---|---|
+| x86_64 | gcc 16.2 from [qbt-musl-cross-make](https://github.com/userdocs/qbt-musl-cross-make) (GitHub) | gcc 11.2 from [musl.cc](https://musl.cc) or its mirror; gcc 16.2 from [cross-tools](https://github.com/cross-tools/musl-cross) (needs glibc) |
+| arm64 | gcc 16.2 from qbt-musl-cross-make | gcc 11.2 from musl.cc |
+| 32-bit x86 or armv7 user space on a 64-bit kernel (containers) | the 64-bit qbt-musl-cross-make gcc that builds 32-bit programs | gcc 11.2 from musl.cc |
+| x86, armv7, armv6, ppc64le | gcc 11.2 from musl.cc or its mirror | |
+
+musl.cc does not answer some networks (GitHub's CI runners, for
+example), which is why the GitHub-hosted toolchains come first where
+there are some. Each toolchain listed was tested: on x86_64 and x86
+natively, and on arm64, armv7, armv6 and ppc64le under qemu-user; CI also
+tests the first choices natively on x86_64, x86, arm64 and armv7. The
+riscv64 and s390x toolchains on musl.cc are left out because their linker
+crashed in that test.
 
 ## The bootstrap tier
 
@@ -157,6 +168,11 @@ the library in `seed/pnut-libc/` (`<string.h>`, `<ctype.h>`, character I/O,
 `malloc`, `strtol`, ...). It is meant for small tools that must run
 somewhere with nothing else, and it is much slower than a native program.
 
+pnut needs a shell other than the public-domain ksh, which crashes or
+hangs running it. That ksh is `/bin/ksh` on NetBSD and both `sh` and `ksh`
+on OpenBSD, so there the shell tier needs dash or bash (those systems come
+with a C compiler, so the system tier normally works anyway).
+
 ## Platforms
 
 | | system | package | download | bootstrap | shell |
@@ -166,14 +182,16 @@ somewhere with nothing else, and it is much slower than a native program.
 | Linux riscv64, s390x, other | yes | yes | - | - | yes |
 | macOS (x86_64, arm64) | yes | Homebrew, Nix, Command Line Tools | - | - | yes |
 | FreeBSD | yes | yes | - | - | yes |
-| NetBSD, OpenBSD, illumos, other POSIX systems | yes | Nix | - | - | yes |
+| NetBSD, illumos, other POSIX systems | yes | Nix | - | - | yes |
+| OpenBSD | yes | Nix | - | - | with dash or bash |
 
 On NetBSD and OpenBSD the compiler and the C headers are part of the base
 system's `comp` set, which no package replaces, so there is no package
 tier there.
 
 The driver is plain POSIX `sh`. The tests run it under dash, bash,
-BusyBox sh, ksh (ksh93), mksh and yash.
+BusyBox sh, ksh93, mksh, yash and posh on Linux, and under the native
+shells of macOS, FreeBSD, OpenBSD and NetBSD.
 
 ## Security
 
@@ -193,7 +211,7 @@ BusyBox sh, ksh (ksh93), mksh and yash.
 ```sh
 sh tests/run.sh                     # every tier that is quick, under every installed shell
 BA_TEST_BOOTSTRAP=1 sh tests/run.sh # also the full bootstrap (~5 minutes)
-BA_TEST_DOWNLOAD=1 sh tests/run.sh  # also a real download of the prebuilt gcc
+BA_TEST_DOWNLOAD=1 sh tests/run.sh  # also a real download of a prebuilt gcc
 sh tests/libc/run.sh                # the libc against glibc (needs gcc and objcopy)
 ```
 
@@ -218,9 +236,12 @@ build-anywhere stands on these projects:
   only kaem and sh.
 - **[bootsh](https://github.com/davidar/bootsh)**: a whole POSIX userland
   with a C99 compiler in one small executable.
-- **[musl.cc](https://musl.cc)** and
-  **[cross-tools/musl-cross](https://github.com/cross-tools/musl-cross)**:
-  static gcc toolchains that run on any Linux, used by the download tier.
+- **[qbt-musl-cross-make](https://github.com/userdocs/qbt-musl-cross-make)**,
+  **[musl.cc](https://musl.cc)** and
+  **[cross-tools/musl-cross](https://github.com/cross-tools/musl-cross)**,
+  all built with [musl-cross-make](https://github.com/richfelker/musl-cross-make)
+  or crosstool-NG: static gcc toolchains that run on any Linux, used by the
+  download tier.
 - **[Homebrew's installer](https://github.com/Homebrew/install)**: the way
   to install the macOS Command Line Tools without a dialog.
 

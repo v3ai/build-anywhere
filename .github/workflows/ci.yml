@@ -13,57 +13,53 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install extra shells
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y dash busybox ksh mksh yash
+        run: sudo apt-get update && sudo apt-get install -y dash busybox ksh mksh yash posh
       - name: Test every quick tier under every shell
         run: BA_TEST_SHELL_TIER=1 sh tests/run.sh
 
   # The package tier for real: containers that start without a C compiler,
   # as root. build-anywhere must install one with the package manager.
   package:
-    name: package (${{ matrix.image }})
+    name: package (${{ matrix.image }}${{ matrix.runner == 'ubuntu-24.04-arm' && ', arm64' || '' }})
     strategy:
       fail-fast: false
       matrix:
+        runner: [ubuntu-latest]
         image:
-          - debian:stable-slim                    # apt-get, no package lists yet
-          - ubuntu:24.04                          # apt-get
-          - fedora:latest                         # dnf
-          - almalinux:9-minimal                   # microdnf
-          - amazonlinux:2023                      # dnf
-          - opensuse/leap:15.6                    # zypper
-          - opensuse/tumbleweed:latest            # zypper
-          - alpine:latest                         # apk
-          - archlinux:latest                      # pacman, no package database yet
-          - ghcr.io/void-linux/void-glibc:latest  # xbps-install
-    runs-on: ubuntu-latest
-    container: ${{ matrix.image }}
+          - debian:stable-slim                         # apt-get, no package lists yet
+          - ubuntu:24.04                               # apt-get
+          - i386/debian:stable-slim                    # apt-get, 32-bit
+          - fedora:latest                              # dnf
+          - almalinux:9-minimal                        # microdnf
+          - amazonlinux:2023                           # dnf
+          - photon:5.0                                 # tdnf
+          - mcr.microsoft.com/azurelinux/base/core:3.0 # tdnf
+          - opensuse/leap:15.6                         # zypper
+          - opensuse/tumbleweed:latest                 # zypper
+          - alpine:latest                              # apk
+          - archlinux:latest                           # pacman, no package database yet
+          - ghcr.io/void-linux/void-glibc:latest       # xbps-install
+        include:
+          - { runner: ubuntu-24.04-arm, image: "debian:stable-slim" }
+          - { runner: ubuntu-24.04-arm, image: "alpine:latest" }
+          - { runner: ubuntu-24.04-arm, image: "fedora:latest" }
+    runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - name: No C compiler is installed
-        run: "! command -v cc && ! command -v gcc && ! command -v clang"
-      - name: Build with the default tiers
-        run: |
-          sh build-anywhere -o hello examples/hello/hello.c 2>err || { cat err; exit 1; }
-          cat err
-          grep -q "installing gcc with" err
-          grep -q "compiling with gcc from" err
-          test "$(./hello pkg)" = "hello, pkg"
-      - name: Build the Universal C example with the installed compiler
-        run: |
-          sh build-anywhere -O2 -o uni examples/universal/main.c examples/universal/p_util.c
-          test "$(./uni)" = "universal: ok"
-      - name: Doctor
-        run: sh build-anywhere --doctor
+      - uses: actions/checkout@v5
+      # docker run rather than a job container: the image starts untouched
+      # (a job container would need node, tar and libstdc++ for checkout).
+      - name: Install a compiler with the package manager and build
+        run: docker run --rm -v "$PWD:/src:ro" -w /src "${{ matrix.image }}" sh .github/ci/package.sh
 
   # Not root, but with passwordless sudo.
   package-sudo:
     runs-on: ubuntu-latest
     container: debian:stable-slim
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Add a user that may use sudo
         run: |
           apt-get update -q && apt-get install -y -q sudo
@@ -82,7 +78,7 @@ jobs:
   package-nix:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
       - name: Get gcc from Nix (no root)
         run: |
@@ -94,7 +90,7 @@ jobs:
   package-brew:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Get gcc from Homebrew (no root)
         run: |
           BA_SUDO=never sh build-anywhere --tiers=package -o hello examples/hello/hello.c 2>err || { cat err; exit 1; }
@@ -119,7 +115,7 @@ jobs:
     steps:
       - name: Check out
         if: matrix.image == ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       # Without actions/checkout, which needs a node that i386 and arm32
       # lack. This installs nothing: BusyBox has wget and tar.
       - name: Check out (container)
@@ -136,7 +132,7 @@ jobs:
   libc:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Compare the build-anywhere libc with glibc
         run: sh tests/libc/run.sh
 
@@ -176,7 +172,7 @@ jobs:
         os: [freebsd, openbsd, netbsd]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Test
         uses: vmactions/freebsd-vm@v1
         if: matrix.os == 'freebsd'
