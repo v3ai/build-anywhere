@@ -8341,6 +8341,7 @@ _handle_printf_call() { let format_str $2; let params $3
           _comp_rvalue __t2 $param $_RVALUE_CTX_BASE
           _string_concat __t1 $__t1 $__t2
           _append_glo_decl __ $__t1
+          params_text=0
         fi
         param=0
         mod=0

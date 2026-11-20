@@ -66,6 +66,6 @@ _ba_sh_winsize() {
 # One byte from fd $2 without waiting for a line (non-canonical mode), or -1
 # when there is none (end of file, or VTIME expired).
 __ba_rawbyte() {
-  __ba_c=$(dd bs=1 count=1 2>/dev/null <&$2 | od -An -tu1)
+  __ba_c=$(dd bs=1 count=1 2>/dev/null <&$2 | od -An -tu1 | tr -dc 0-9)
   case "$__ba_c" in *[0-9]*) : $(($1 = __ba_c)) ;; *) : $(($1 = -1)) ;; esac
 }

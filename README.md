@@ -197,10 +197,10 @@ That library has `<string.h>`, `<ctype.h>`, character and file I/O,
   are correctly rounded, conversions to and from text are exact, and the
   maths functions are within 2 ULP of glibc's, so programs print the same
   digits as when compiled by gcc. `float` is computed as `double`. It needs
-  a shell with exact 64-bit integer arithmetic, as dash, bash, yash and
-  BusyBox sh have on 64-bit systems (mksh's is 32-bit, and ksh93 loses
-  bits where `long double` is a `double`, as on arm64), which the program
-  checks when it starts. In dash an addition or multiplication takes about 0.2 ms and
+  a shell with exact 64-bit integer arithmetic, as dash, bash, yash,
+  BusyBox sh and the BSD shells have on 64-bit systems (not mksh, whose
+  arithmetic is 32-bit, nor ksh93, which keeps arithmetic results with 18
+  digits), which the program checks when it starts. In dash an addition or multiplication takes about 0.2 ms and
   `sin` about 2 ms; bash is about four times slower.
 - **Terminal control** with `stty`: `<termios.h>` (`tcgetattr`,
   `tcsetattr`, `cfmakeraw`; the flags, `VMIN` and `VTIME` are applied, the

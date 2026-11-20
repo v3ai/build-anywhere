@@ -7,9 +7,12 @@ build-anywhere's additions to pnut's shell backend (the shell tier):
    through ba_dfmt, and length modifiers such as %ld are dropped;
  - hooks in the runtime's getchar, read, write and close for terminals in
    non-canonical mode and for sockets (seed/pnut-libc/term.sh, net.sh).
+ - a fix to printf: after a %s, the next printf call repeated the
+   arguments of the previous one, which FreeBSD's printf rejects.
 
-Everything is under SH_SUPPORT_FLOAT and SH_BA_IO, which only the shell
-target defines: pnut's x86 compiler (pnut-exe) is unchanged.
+All of it is in the shell target (sh.c, sh-runtime.c, and pnut.c under
+SH_SUPPORT_FLOAT and SH_BA_IO, which only the shell target defines):
+pnut's x86 compiler (pnut-exe) is unchanged.
 
 diff -ruN a/pnut.c b/pnut.c
 --- a/pnut.c
@@ -206,7 +209,16 @@ diff -ruN a/sh.c b/sh.c
            || op == ENUM_KW || op == '*') {
            return wrap_in_condition_if_needed(context, test_side_effects, wrap_int(1));
          }
-@@ -2306,6 +2327,10 @@
+@@ -1497,6 +1518,8 @@
+           format_start = format_str + 1;
+           // Compile printf("...%s...", str) to _put_pstr str
+           append_glo_decl(string_concat(wrap_str_lit("_put_pstr __ "), comp_rvalue(param, RVALUE_CTX_BASE)));
++          // build-anywhere: the parameters went to that printf call
++          params_text = 0;
+         }
+         param = 0; // Consume param
+         mod = false;
+@@ -2306,6 +2329,10 @@
    int op = get_op(node);
    fun_gensym_ix = 0;
  

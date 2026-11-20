@@ -1518,6 +1518,8 @@ void handle_printf_call(char *format_str, ast params) {
           format_start = format_str + 1;
           // Compile printf("...%s...", str) to _put_pstr str
           append_glo_decl(string_concat(wrap_str_lit("_put_pstr __ "), comp_rvalue(param, RVALUE_CTX_BASE)));
+          // build-anywhere: the parameters went to that printf call
+          params_text = 0;
         }
         param = 0; // Consume param
         mod = false;

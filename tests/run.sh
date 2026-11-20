@@ -488,8 +488,8 @@ shell_libs() {
             fs=$s
             [ "$s" = busybox ] && fs="busybox sh"
             # shellcheck disable=SC2016
-            if [ "$($fs -c 'echo $(( ((1 << 62) + 1) & 3 ))' 2>/dev/null)" != 1 ]; then
-                skip "[$s] shell: floating point (the shell has no 64-bit arithmetic)"
+            if [ "$($fs -c ': $((t = (1 << 31) * (1 << 31) + 1)); echo $t' 2>/dev/null)" != 4611686018427387905 ]; then
+                skip "[$s] shell: floating point (the shell has no exact 64-bit arithmetic)"
                 continue
             fi
             # shellcheck disable=SC2086
